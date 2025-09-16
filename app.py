@@ -648,10 +648,6 @@ def main():
             show_legend = st.checkbox("Hiển thị chú thích", value=True)
             show_weekend = st.checkbox("Hiển thị cuối tuần", value=True)
         
-        # Show legend if enabled
-        if show_legend:
-            with st.expander("📋 Chú thích màu sắc", expanded=False):
-                display_calendar_legend()
         
         # Convert data to events
         events = convert_df_to_calendar_events(filtered_df)
