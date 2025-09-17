@@ -546,13 +546,10 @@ def convert_df_to_calendar_events(df, use_reason_classification=True):
 
 def display_calendar_legend(show_reason_classification=True):
     """Hiển thị chú thích màu sắc cho calendar"""
-    state_info = get_state_info()
-    metatype_info = get_metatype_info()
-    
     st.markdown("#### 📋 Chú thích")
     
     if show_reason_classification:
-        # Hiển thị legend cho reason classification
+        # Chỉ hiển thị legend cho reason classification
         st.markdown("**🎯 Phân loại theo lý do (AI Classification):**")
         
         reason_classifier = ReasonClassifier()
@@ -577,29 +574,8 @@ def display_calendar_legend(show_reason_classification=True):
                            f"border-radius: 3px; margin-right: 10px;'></div>"
                            f"<span>{info['icon']} {info['label']}</span></div>", 
                            unsafe_allow_html=True)
-        
-        st.markdown("---")
-    
-    # Legend cũ
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("**Trạng thái:**")
-        for state, info in state_info.items():
-            st.markdown(f"<div style='display: flex; align-items: center; margin: 5px 0;'>"
-                       f"<div style='width: 20px; height: 20px; background-color: {info['color']}; "
-                       f"border-radius: 3px; margin-right: 10px;'></div>"
-                       f"<span>{info['icon']} {info['label']}</span></div>", 
-                       unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown("**Loại nghỉ phép:**")
-        for metatype, info in metatype_info.items():
-            st.markdown(f"<div style='display: flex; align-items: center; margin: 5px 0;'>"
-                       f"<div style='width: 20px; height: 20px; background-color: {info['color']}; "
-                       f"border-radius: 3px; margin-right: 10px;'></div>"
-                       f"<span>{info['icon']} {info['label']}</span></div>", 
-                       unsafe_allow_html=True)
+    else:
+        st.info("💡 Bật 'Sử dụng AI phân loại lý do' để xem chú thích màu sắc thông minh")
 
 def display_event_details(event_data):
     """Hiển thị chi tiết event khi click"""
