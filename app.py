@@ -9,6 +9,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from streamlit_calendar import calendar
 import os
+
 # Cấu hình page
 st.set_page_config(
     page_title="Time Off Dashboard", 
@@ -227,8 +228,6 @@ class TimeoffProcessor:
         
         return df
 
-
-
 # Cache dữ liệu để tránh gọi API liên tục
 @st.cache_data(ttl=300)  # Cache 5 phút
 def load_timeoff_data():
@@ -271,7 +270,7 @@ def get_metatype_info():
     }
 
 def convert_df_to_calendar_events(df):
-    """Chuyển DataFrame thành format events cho calendar với thông tin chi tiết hơn"""
+    """Chuyển DataFrame thành format events cho calendar với tối ưu hiển thị text"""
     events = []
     
     if df.empty:
@@ -290,20 +289,35 @@ def convert_df_to_calendar_events(df):
                 color = state_info.get(row['state'], {}).get('color', '#007bff')
                 icon = state_info.get(row['state'], {}).get('icon', '📅')
             
-            # Format title with icon
-            title = f"{icon} {row['employee_name']}"
+            # Tối ưu title để tránh bị cắt
+            # Rút ngắn tên nhân viên nếu quá dài
+            employee_name = row['employee_name']
+            if len(employee_name) > 15:
+                name_parts = employee_name.split()
+                if len(name_parts) > 1:
+                    # Lấy tên và chữ cái đầu họ
+                    employee_name = f"{name_parts[-1]} {name_parts[0][0]}."
+                else:
+                    employee_name = employee_name[:12] + "..."
             
-            # Add reason if available
+            # Format title với xuống dòng
+            title = f"{icon} {employee_name}"
+            
+            # Thêm thông tin lý do hoặc loại nghỉ với xuống dòng
             if row['ly_do'] and row['ly_do'] != '':
-                reason_short = row['ly_do'][:25] + "..." if len(row['ly_do']) > 25 else row['ly_do']
-                title += f" - {reason_short}"
+                reason = row['ly_do']
+                if len(reason) > 20:
+                    reason = reason[:17] + "..."
+                title += f"\n{reason}"
             else:
                 metatype_label = metatype_info.get(row['metatype'], {}).get('label', row['metatype'].title())
-                title += f" - {metatype_label}"
+                if len(metatype_label) > 20:
+                    metatype_label = metatype_label[:17] + "..."
+                title += f"\n{metatype_label}"
             
-            # Add days info
+            # Thêm số ngày với xuống dòng
             if row['total_leave_days'] > 0:
-                title += f" ({row['total_leave_days']} ngày)"
+                title += f"\n({row['total_leave_days']} ngày)"
             
             # Create comprehensive event
             event = {
@@ -437,7 +451,7 @@ def display_event_details(event_data):
 def main():
     """Main dashboard"""
     
-    # Custom CSS for better UI
+    # Custom CSS cho calendar và hiển thị text tốt hơn
     st.markdown("""
     <style>
     .main-header {
@@ -471,6 +485,95 @@ def main():
         padding: 5px;
         background: #f8f9fa;
         border-radius: 5px;
+    }
+    
+    /* Tối ưu CSS cho calendar events */
+    .fc-event {
+        font-size: 11px !important;
+        border-radius: 6px !important;
+        border: none !important;
+        padding: 2px 4px !important;
+        font-weight: 500 !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.2) !important;
+        transition: all 0.2s ease !important;
+        white-space: pre-line !important;
+        line-height: 1.2 !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        min-height: 20px !important;
+    }
+    
+    .fc-event:hover {
+        transform: translateY(-1px) !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
+        z-index: 1000 !important;
+    }
+    
+    .fc-event-title {
+        font-weight: 600 !important;
+        white-space: pre-line !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        line-height: 1.1 !important;
+    }
+    
+    .fc-daygrid-event {
+        margin: 1px 2px !important;
+        min-height: 22px !important;
+    }
+    
+    .fc-daygrid-event-harness {
+        margin-bottom: 2px !important;
+    }
+    
+    /* Tăng chiều cao của calendar cells */
+    .fc-daygrid-day {
+        min-height: 80px !important;
+    }
+    
+    .fc-daygrid-day-frame {
+        min-height: 80px !important;
+    }
+    
+    .fc-daygrid-day-events {
+        margin-bottom: 2px !important;
+    }
+    
+    .fc-button-primary {
+        background-color: #667eea !important;
+        border-color: #667eea !important;
+    }
+    
+    .fc-button-primary:hover {
+        background-color: #764ba2 !important;
+        border-color: #764ba2 !important;
+    }
+    
+    .fc-today-button {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+    }
+    
+    .fc-header-toolbar {
+        margin-bottom: 1em !important;
+        padding: 10px !important;
+        background: #f8f9fa !important;
+        border-radius: 8px !important;
+    }
+    
+    .fc-col-header-cell {
+        background: #f8f9fa !important;
+        font-weight: 600 !important;
+    }
+    
+    .fc-day-today {
+        background-color: rgba(102, 126, 234, 0.1) !important;
+    }
+    
+    /* Responsive font size */
+    @media (max-width: 768px) {
+        .fc-event {
+            font-size: 10px !important;
+        }
     }
     </style>
     """, unsafe_allow_html=True)
@@ -648,16 +751,15 @@ def main():
             show_legend = st.checkbox("Hiển thị chú thích", value=True)
             show_weekend = st.checkbox("Hiển thị cuối tuần", value=True)
         
-        
         # Convert data to events
         events = convert_df_to_calendar_events(filtered_df)
         
-        # Enhanced calendar options
+        # Enhanced calendar options với tối ưu hiển thị
         calendar_options = {
             "editable": False,
             "navLinks": True,
             "selectable": False,
-            "dayMaxEvents": 3,
+            "dayMaxEvents": 5,  # Tăng số events tối đa
             "moreLinkClick": "popover",
             "eventDisplay": "block",
             "displayEventTime": False,
@@ -673,7 +775,7 @@ def main():
                 "right": ""
             },
             "initialView": mode,
-            "height": 700,
+            "height": 750,  # Tăng chiều cao
             "eventMouseEnter": True,
             "eventMouseLeave": True,
             "locale": "vi",
@@ -683,64 +785,11 @@ def main():
                 "week": "Tuần", 
                 "day": "Ngày",
                 "list": "Danh sách"
-            }
+            },
+            "dayMaxEventRows": 4,  # Giới hạn số dòng events
+            "moreLinkText": "thêm",  # Text cho link "more"
+            "eventMinHeight": 20,  # Chiều cao tối thiểu của event
         }
-        
-        # Custom CSS for calendar
-        custom_css = """
-        <style>
-        .fc {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-        .fc-event {
-            font-size: 13px;
-            border-radius: 6px;
-            border: none;
-            padding: 2px 4px;
-            font-weight: 500;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-            transition: all 0.2s ease;
-        }
-        .fc-event:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-        }
-        .fc-event-title {
-            font-weight: 600;
-            text-overflow: ellipsis;
-            overflow: hidden;
-        }
-        .fc-daygrid-event {
-            margin: 1px 2px;
-        }
-        .fc-button-primary {
-            background-color: #667eea;
-            border-color: #667eea;
-        }
-        .fc-button-primary:hover {
-            background-color: #764ba2;
-            border-color: #764ba2;
-        }
-        .fc-today-button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }
-        .fc-header-toolbar {
-            margin-bottom: 1em;
-            padding: 10px;
-            background: #f8f9fa;
-            border-radius: 8px;
-        }
-        .fc-col-header-cell {
-            background: #f8f9fa;
-            font-weight: 600;
-        }
-        .fc-day-today {
-            background-color: rgba(102, 126, 234, 0.1) !important;
-        }
-        </style>
-        """
-        
-        st.markdown(custom_css, unsafe_allow_html=True)
         
         # Display calendar
         if events:
@@ -749,7 +798,6 @@ def main():
             calendar_state = calendar(
                 events=events,
                 options=calendar_options,
-                custom_css=custom_css,
                 key="timeoff_calendar"
             )
             
@@ -763,6 +811,10 @@ def main():
         else:
             st.info("📅 Không có dữ liệu time off trong khoảng thời gian được chọn")
             st.markdown("**Gợi ý:** Thử điều chỉnh bộ lọc để xem thêm dữ liệu")
+        
+        # Hiển thị chú thích nếu được chọn
+        if show_legend:
+            display_calendar_legend()
     
     with tab2:
         st.subheader("📊 Phân tích dữ liệu")
