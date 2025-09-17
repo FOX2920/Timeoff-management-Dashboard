@@ -481,15 +481,21 @@ def convert_df_to_calendar_events(df, use_reason_classification=True):
     for _, row in df.iterrows():
         if pd.notna(row['start_date']) and pd.notna(row['end_date']):
             # Determine color based on different criteria
-            if use_reason_classification and row['ly_do'] and str(row['ly_do']).strip():
-                # Sử dụng classification dựa trên lý do
-                reason_result = reason_classifier.classify_reason(str(row['ly_do']))
+            if use_reason_classification:
+                # Khi sử dụng AI classification, luôn sử dụng colors từ ReasonClassifier
+                if row['ly_do'] and str(row['ly_do']).strip():
+                    # Có lý do - phân loại bằng AI
+                    reason_result = reason_classifier.classify_reason(str(row['ly_do']))
+                else:
+                    # Không có lý do - sử dụng default category từ ReasonClassifier
+                    reason_result = reason_classifier.get_default_category()
+                
                 color = reason_result['color']
                 icon = reason_result['icon']
                 classification_info = f" ({reason_result['label']})"
                 similarity_score = reason_result.get('similarity', 0)
             else:
-                # Fallback về logic cũ
+                # Fallback về logic cũ khi không sử dụng AI classification
                 if row['state'] == 'approved':
                     color = metatype_info.get(row['metatype'], {}).get('color', '#28a745')
                     icon = metatype_info.get(row['metatype'], {}).get('icon', '📅')
@@ -509,8 +515,11 @@ def convert_df_to_calendar_events(df, use_reason_classification=True):
                 if use_reason_classification:
                     title += classification_info
             else:
-                metatype_label = metatype_info.get(row['metatype'], {}).get('label', row['metatype'].title())
-                title += f" - {metatype_label}"
+                if not use_reason_classification:
+                    metatype_label = metatype_info.get(row['metatype'], {}).get('label', row['metatype'].title())
+                    title += f" - {metatype_label}"
+                else:
+                    title += classification_info
             
             # Add days info
             if row['total_leave_days'] > 0:
@@ -557,6 +566,13 @@ def display_calendar_legend(show_reason_classification=True):
         col1, col2 = st.columns(2)
         
         categories = list(reason_classifier.categories.items())
+        # Thêm category "Khác" vào cuối
+        categories.append(('other', {
+            'color': '#6c757d',
+            'icon': '📝', 
+            'label': 'Khác'
+        }))
+        
         mid_point = len(categories) // 2
         
         with col1:
