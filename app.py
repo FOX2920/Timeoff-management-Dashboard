@@ -9,11 +9,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from streamlit_calendar import calendar
 import os
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-import re
-import unicodedata
-
 # Cấu hình page
 st.set_page_config(
     page_title="Time Off Dashboard", 
@@ -21,199 +16,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-class ReasonClassifier:
-    """Class để phân loại lý do nghỉ bằng cosine similarity"""
-    
-    def __init__(self):
-        # Định nghĩa categories và từ khóa đại diện
-        self.categories = {
-            'sick': {
-                'keywords': [
-                    'ốm', 'bệnh', 'đau', 'sốt', 'cảm', 'ho', 'khám bệnh', 'chữa bệnh',
-                    'bác sĩ', 'bệnh viện', 'phòng khám', 'điều trị', 'thuốc', 'y tế',
-                    'sức khỏe', 'không khỏe', 'mệt', 'kiệt sức', 'stress', 'lo âu'
-                ],
-                'color': '#dc3545',  # Đỏ
-                'icon': '🤒',
-                'label': 'Sức khỏe'
-            },
-            'family': {
-                'keywords': [
-                    'gia đình', 'bố', 'mẹ', 'con', 'vợ', 'chồng', 'anh', 'chị', 'em',
-                    'ông', 'bà', 'cháu', 'họp mặt gia đình', 'việc gia đình', 'chăm sóc',
-                    'tang lễ', 'đám tang', 'đám cưới', 'lễ gia đình', 'sinh nhật',
-                    'kỷ niệm', 'cha mẹ', 'con cái', 'người thân'
-                ],
-                'color': '#e83e8c',  # Hồng
-                'icon': '👨‍👩‍👧‍👦',
-                'label': 'Gia đình'
-            },
-            'personal': {
-                'keywords': [
-                    'cá nhân', 'việc riêng', 'bận việc cá nhân', 'công việc cá nhân',
-                    'giải quyết việc', 'làm việc cá nhân', 'việc tư', 'tự do',
-                    'nghỉ ngơi', 'thư giãn', 'du lịch cá nhân', 'mua sắm'
-                ],
-                'color': '#6f42c1',  # Tím
-                'icon': '👤',
-                'label': 'Cá nhân'
-            },
-            'travel': {
-                'keywords': [
-                    'du lịch', 'đi chơi', 'nghỉ mát', 'vacation', 'tour', 'picnic',
-                    'về quê', 'thăm quê', 'đi xa', 'ra ngoài', 'nghỉ dưỡng',
-                    'resort', 'biển', 'núi', 'thành phố khác', 'tỉnh khác'
-                ],
-                'color': '#20c997',  # Xanh lá nhạt
-                'icon': '✈️',
-                'label': 'Du lịch'
-            },
-            'emergency': {
-                'keywords': [
-                    'khẩn cấp', 'gấp', 'emergency', 'cứu cấp', 'tai nạn', 'sự cố',
-                    'bất ngờ', 'đột xuất', 'không thể đến', 'không thể làm',
-                    'hỏa hoạn', 'thiên tai', 'mất mát', 'việc quan trọng'
-                ],
-                'color': '#fd7e14',  # Cam
-                'icon': '🚨',
-                'label': 'Khẩn cấp'
-            },
-            'business': {
-                'keywords': [
-                    'công tác', 'công việc', 'meeting', 'họp', 'hội nghị', 'đào tạo',
-                    'khóa học', 'seminar', 'conference', 'business', 'làm việc ngoài',
-                    'gặp khách hàng', 'partner', 'đối tác', 'dự án', 'project'
-                ],
-                'color': '#17a2b8',  # Xanh dương nhạt
-                'icon': '💼',
-                'label': 'Công tác'
-            },
-            'rest': {
-                'keywords': [
-                    'nghỉ', 'rest', 'tired', 'mệt', 'cần nghỉ', 'nghỉ ngơi',
-                    'phục hồi', 'tái tạo năng lượng', 'thư giãn', 'relax',
-                    'break', 'recharge', 'refresh', 'recovery'
-                ],
-                'color': '#28a745',  # Xanh lá
-                'icon': '😴',
-                'label': 'Nghỉ ngơi'
-            }
-        }
-        
-        # Tạo corpus từ keywords
-        self.corpus = []
-        self.category_names = []
-        
-        for category, data in self.categories.items():
-            combined_text = ' '.join(data['keywords'])
-            self.corpus.append(combined_text)
-            self.category_names.append(category)
-        
-        # Khởi tạo TF-IDF vectorizer
-        self.vectorizer = TfidfVectorizer(
-            ngram_range=(1, 2),
-            stop_words=None,
-            lowercase=True,
-            max_features=1000
-        )
-        
-        # Fit vectorizer với corpus
-        self.category_vectors = self.vectorizer.fit_transform(self.corpus)
-    
-    def preprocess_text(self, text: str) -> str:
-        """Tiền xử lý text"""
-        if not text or pd.isna(text):
-            return ""
-        
-        # Chuyển về lowercase
-        text = str(text).lower()
-        
-        # Loại bỏ dấu câu và ký tự đặc biệt
-        text = re.sub(r'[^\w\s]', ' ', text)
-        
-        # Loại bỏ khoảng trắng thừa
-        text = re.sub(r'\s+', ' ', text).strip()
-        
-        return text
-    
-    def classify_reason(self, reason: str, threshold: float = 0.1) -> Dict:
-        """
-        Phân loại lý do nghỉ bằng cosine similarity
-        
-        Args:
-            reason: Lý do nghỉ
-            threshold: Ngưỡng similarity tối thiểu
-            
-        Returns:
-            Dict chứa thông tin category
-        """
-        if not reason or pd.isna(reason):
-            return self.get_default_category()
-        
-        # Tiền xử lý text
-        processed_reason = self.preprocess_text(reason)
-        
-        if not processed_reason:
-            return self.get_default_category()
-        
-        try:
-            # Vector hóa reason
-            reason_vector = self.vectorizer.transform([processed_reason])
-            
-            # Tính cosine similarity với tất cả categories
-            similarities = cosine_similarity(reason_vector, self.category_vectors)[0]
-            
-            # Tìm category có similarity cao nhất
-            max_similarity_idx = np.argmax(similarities)
-            max_similarity = similarities[max_similarity_idx]
-            
-            # Kiểm tra threshold
-            if max_similarity >= threshold:
-                best_category = self.category_names[max_similarity_idx]
-                category_info = self.categories[best_category].copy()
-                category_info['similarity'] = max_similarity
-                category_info['category'] = best_category
-                return category_info
-            else:
-                return self.get_default_category()
-                
-        except Exception as e:
-            print(f"Error in classify_reason: {e}")
-            return self.get_default_category()
-    
-    def get_default_category(self) -> Dict:
-        """Trả về category mặc định"""
-        return {
-            'color': '#6c757d',  # Xám
-            'icon': '📝',
-            'label': 'Khác',
-            'category': 'other',
-            'similarity': 0.0
-        }
-    
-    def get_category_distribution(self, reasons: List[str]) -> Dict:
-        """Phân tích phân bố categories từ danh sách reasons"""
-        distribution = {}
-        
-        for reason in reasons:
-            if pd.notna(reason) and str(reason).strip():
-                result = self.classify_reason(str(reason))
-                category = result['category']
-                
-                if category not in distribution:
-                    distribution[category] = {
-                        'count': 0,
-                        'reasons': [],
-                        'color': result['color'],
-                        'label': result['label'],
-                        'icon': result['icon']
-                    }
-                
-                distribution[category]['count'] += 1
-                distribution[category]['reasons'].append(reason)
-        
-        return distribution
 
 class EmployeeManager:
     """Class để quản lý thông tin nhân viên và mapping username -> name"""
@@ -289,6 +91,7 @@ class TimeoffProcessor:
     
     def clean_vietnamese_text(self, text):
         """Clean Vietnamese text for column names"""
+        import unicodedata
         text = unicodedata.normalize('NFD', text)
         text = ''.join(char for char in text if unicodedata.category(char) != 'Mn')
         text = text.replace(' ', '_').replace('/', '_').replace('(', '').replace(')', '').replace('-', '_').lower()
@@ -424,6 +227,8 @@ class TimeoffProcessor:
         
         return df
 
+
+
 # Cache dữ liệu để tránh gọi API liên tục
 @st.cache_data(ttl=300)  # Cache 5 phút
 def load_timeoff_data():
@@ -465,8 +270,8 @@ def get_metatype_info():
         'funeral': {'color': '#6c757d', 'icon': '🕊️', 'label': 'Nghỉ tang'}
     }
 
-def convert_df_to_calendar_events(df, use_reason_classification=True):
-    """Chuyển DataFrame thành format events cho calendar với phân loại lý do bằng cosine similarity"""
+def convert_df_to_calendar_events(df):
+    """Chuyển DataFrame thành format events cho calendar với thông tin chi tiết hơn"""
     events = []
     
     if df.empty:
@@ -475,35 +280,15 @@ def convert_df_to_calendar_events(df, use_reason_classification=True):
     state_info = get_state_info()
     metatype_info = get_metatype_info()
     
-    # Khởi tạo classifier
-    reason_classifier = ReasonClassifier() if use_reason_classification else None
-    
     for _, row in df.iterrows():
         if pd.notna(row['start_date']) and pd.notna(row['end_date']):
-            # Determine color based on different criteria
-            if use_reason_classification:
-                # Khi sử dụng AI classification, luôn sử dụng colors từ ReasonClassifier
-                if row['ly_do'] and str(row['ly_do']).strip():
-                    # Có lý do - phân loại bằng AI
-                    reason_result = reason_classifier.classify_reason(str(row['ly_do']))
-                else:
-                    # Không có lý do - sử dụng default category từ ReasonClassifier
-                    reason_result = reason_classifier.get_default_category()
-                
-                color = reason_result['color']
-                icon = reason_result['icon']
-                classification_info = f" ({reason_result['label']})"
-                similarity_score = reason_result.get('similarity', 0)
+            # Determine color based on state and metatype
+            if row['state'] == 'approved':
+                color = metatype_info.get(row['metatype'], {}).get('color', '#28a745')
+                icon = metatype_info.get(row['metatype'], {}).get('icon', '📅')
             else:
-                # Fallback về logic cũ khi không sử dụng AI classification
-                if row['state'] == 'approved':
-                    color = metatype_info.get(row['metatype'], {}).get('color', '#28a745')
-                    icon = metatype_info.get(row['metatype'], {}).get('icon', '📅')
-                else:
-                    color = state_info.get(row['state'], {}).get('color', '#007bff')
-                    icon = state_info.get(row['state'], {}).get('icon', '📅')
-                classification_info = ""
-                similarity_score = 0
+                color = state_info.get(row['state'], {}).get('color', '#007bff')
+                icon = state_info.get(row['state'], {}).get('icon', '📅')
             
             # Format title with icon
             title = f"{icon} {row['employee_name']}"
@@ -512,14 +297,9 @@ def convert_df_to_calendar_events(df, use_reason_classification=True):
             if row['ly_do'] and row['ly_do'] != '':
                 reason_short = row['ly_do'][:25] + "..." if len(row['ly_do']) > 25 else row['ly_do']
                 title += f" - {reason_short}"
-                if use_reason_classification:
-                    title += classification_info
             else:
-                if not use_reason_classification:
-                    metatype_label = metatype_info.get(row['metatype'], {}).get('label', row['metatype'].title())
-                    title += f" - {metatype_label}"
-                else:
-                    title += classification_info
+                metatype_label = metatype_info.get(row['metatype'], {}).get('label', row['metatype'].title())
+                title += f" - {metatype_label}"
             
             # Add days info
             if row['total_leave_days'] > 0:
@@ -543,9 +323,7 @@ def convert_df_to_calendar_events(df, use_reason_classification=True):
                     "approver": row['final_approver'],
                     "created_time": row['created_time'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['created_time']) else 'N/A',
                     "last_update": row['last_update'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['last_update']) else 'N/A',
-                    "paid": row['paid_timeoff'] if 'paid_timeoff' in row else False,
-                    "classification": classification_info,
-                    "similarity_score": similarity_score
+                    "paid": row['paid_timeoff'] if 'paid_timeoff' in row else False
                 },
                 "display": "block"
             }
@@ -553,45 +331,32 @@ def convert_df_to_calendar_events(df, use_reason_classification=True):
     
     return events
 
-def display_calendar_legend(show_reason_classification=True):
+def display_calendar_legend():
     """Hiển thị chú thích màu sắc cho calendar"""
+    state_info = get_state_info()
+    metatype_info = get_metatype_info()
+    
     st.markdown("#### 📋 Chú thích")
     
-    if show_reason_classification:
-        # Chỉ hiển thị legend cho reason classification
-        st.markdown("**🎯 Phân loại theo lý do (AI Classification):**")
-        
-        reason_classifier = ReasonClassifier()
-        
-        col1, col2 = st.columns(2)
-        
-        categories = list(reason_classifier.categories.items())
-        # Thêm category "Khác" vào cuối
-        categories.append(('other', {
-            'color': '#6c757d',
-            'icon': '📝', 
-            'label': 'Khác'
-        }))
-        
-        mid_point = len(categories) // 2
-        
-        with col1:
-            for category, info in categories[:mid_point]:
-                st.markdown(f"<div style='display: flex; align-items: center; margin: 5px 0;'>"
-                           f"<div style='width: 20px; height: 20px; background-color: {info['color']}; "
-                           f"border-radius: 3px; margin-right: 10px;'></div>"
-                           f"<span>{info['icon']} {info['label']}</span></div>", 
-                           unsafe_allow_html=True)
-        
-        with col2:
-            for category, info in categories[mid_point:]:
-                st.markdown(f"<div style='display: flex; align-items: center; margin: 5px 0;'>"
-                           f"<div style='width: 20px; height: 20px; background-color: {info['color']}; "
-                           f"border-radius: 3px; margin-right: 10px;'></div>"
-                           f"<span>{info['icon']} {info['label']}</span></div>", 
-                           unsafe_allow_html=True)
-    else:
-        st.info("💡 Bật 'Sử dụng AI phân loại lý do' để xem chú thích màu sắc thông minh")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Trạng thái:**")
+        for state, info in state_info.items():
+            st.markdown(f"<div style='display: flex; align-items: center; margin: 5px 0;'>"
+                       f"<div style='width: 20px; height: 20px; background-color: {info['color']}; "
+                       f"border-radius: 3px; margin-right: 10px;'></div>"
+                       f"<span>{info['icon']} {info['label']}</span></div>", 
+                       unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown("**Loại nghỉ phép:**")
+        for metatype, info in metatype_info.items():
+            st.markdown(f"<div style='display: flex; align-items: center; margin: 5px 0;'>"
+                       f"<div style='width: 20px; height: 20px; background-color: {info['color']}; "
+                       f"border-radius: 3px; margin-right: 10px;'></div>"
+                       f"<span>{info['icon']} {info['label']}</span></div>", 
+                       unsafe_allow_html=True)
 
 def display_event_details(event_data):
     """Hiển thị chi tiết event khi click"""
@@ -650,13 +415,6 @@ def display_event_details(event_data):
         reason = props.get('reason', 'Không có thông tin')
         if reason and reason.strip():
             st.success(f"**Lý do:** {reason}")
-            
-            # Hiển thị thông tin classification nếu có
-            classification = props.get('classification', '')
-            similarity_score = props.get('similarity_score', 0)
-            if classification and similarity_score > 0:
-                st.info(f"**AI Classification:** {classification}")
-                st.text(f"Độ chính xác: {similarity_score:.2f}")
         else:
             st.info("**Lý do:** Không có thông tin")
         
@@ -675,70 +433,6 @@ def display_event_details(event_data):
         st.text(f"Tạo: {props.get('created_time', 'N/A')}")
     with col4:
         st.text(f"Cập nhật: {props.get('last_update', 'N/A')}")
-
-def display_reason_analysis(df):
-    """Hiển thị phân tích lý do nghỉ phép"""
-    st.markdown("### 🤖 Phân tích lý do nghỉ phép (AI Analysis)")
-    
-    if df.empty or 'ly_do' not in df.columns:
-        st.info("Không có dữ liệu lý do để phân tích")
-        return
-    
-    # Lọc ra những record có lý do
-    df_with_reason = df[df['ly_do'].notna() & (df['ly_do'].astype(str).str.strip() != '')]
-    
-    if df_with_reason.empty:
-        st.info("Không có lý do nghỉ phép trong dữ liệu")
-        return
-    
-    # Phân loại
-    classifier = ReasonClassifier()
-    reasons_list = df_with_reason['ly_do'].astype(str).tolist()
-    distribution = classifier.get_category_distribution(reasons_list)
-    
-    # Hiển thị kết quả
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        # Biểu đồ phân bố
-        if distribution:
-            categories = []
-            counts = []
-            colors = []
-            
-            for category, data in distribution.items():
-                categories.append(f"{data['icon']} {data['label']}")
-                counts.append(data['count'])
-                colors.append(data['color'])
-            
-            fig = px.pie(
-                values=counts,
-                names=categories,
-                title="🎯 Phân bố lý do nghỉ phép (AI Classification)",
-                color_discrete_sequence=colors
-            )
-            fig.update_traces(textposition='inside', textinfo='percent+label')
-            fig.update_layout(showlegend=True, height=400)
-            st.plotly_chart(fig, use_container_width=True)
-    
-    with col2:
-        # Thống kê chi tiết
-        st.markdown("**📊 Thống kê chi tiết:**")
-        
-        total_with_reason = len(df_with_reason)
-        total_classified = sum(data['count'] for data in distribution.values())
-        
-        st.metric("Tổng số có lý do", total_with_reason)
-        st.metric("Đã phân loại", total_classified)
-        st.metric("Tỷ lệ phân loại", f"{total_classified/total_with_reason*100:.1f}%")
-        
-        # Top categories
-        sorted_categories = sorted(distribution.items(), key=lambda x: x[1]['count'], reverse=True)
-        
-        st.markdown("**🏆 Top categories:**")
-        for i, (category, data) in enumerate(sorted_categories[:5]):
-            percentage = (data['count'] / total_classified * 100) if total_classified > 0 else 0
-            st.markdown(f"**{i+1}.** {data['icon']} {data['label']}: {data['count']} ({percentage:.1f}%)")
 
 def main():
     """Main dashboard"""
@@ -785,7 +479,7 @@ def main():
     st.markdown("""
     <div class="main-header">
         <h1>🏖️ Time Off Management Dashboard</h1>
-        <p>Quản lý và theo dõi yêu cầu nghỉ phép một cách hiệu quả với AI Classification</p>
+        <p>Quản lý và theo dõi yêu cầu nghỉ phép một cách hiệu quả</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -799,9 +493,6 @@ def main():
     
     # Sidebar filters with better styling
     st.sidebar.markdown("## 🔍 Bộ lọc dữ liệu")
-    
-    # AI Classification option
-    use_ai_classification = st.sidebar.checkbox("🤖 Sử dụng AI phân loại lý do", value=True)
     
     # Date range filter
     if not df.empty and 'start_date' in df.columns:
@@ -921,10 +612,9 @@ def main():
         )
     
     # Tabs with improved styling
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         "📅 Calendar View", 
         "📊 Analytics", 
-        "🤖 AI Analysis",
         "📋 Data Table", 
         "⚙️ Settings"
     ])
@@ -958,8 +648,9 @@ def main():
             show_legend = st.checkbox("Hiển thị chú thích", value=True)
             show_weekend = st.checkbox("Hiển thị cuối tuần", value=True)
         
-        # Convert data to events with AI classification
-        events = convert_df_to_calendar_events(filtered_df, use_reason_classification=use_ai_classification)
+        
+        # Convert data to events
+        events = convert_df_to_calendar_events(filtered_df)
         
         # Enhanced calendar options
         calendar_options = {
@@ -1072,10 +763,6 @@ def main():
         else:
             st.info("📅 Không có dữ liệu time off trong khoảng thời gian được chọn")
             st.markdown("**Gợi ý:** Thử điều chỉnh bộ lọc để xem thêm dữ liệu")
-        
-        # Show legend
-        if show_legend:
-            display_calendar_legend(show_reason_classification=use_ai_classification)
     
     with tab2:
         st.subheader("📊 Phân tích dữ liệu")
@@ -1148,9 +835,6 @@ def main():
                     st.plotly_chart(fig4, use_container_width=True)
     
     with tab3:
-        display_reason_analysis(filtered_df)
-    
-    with tab4:
         st.subheader("📋 Bảng dữ liệu")
         
         # Display options
@@ -1222,7 +906,7 @@ def main():
         else:
             st.info("📭 Không có dữ liệu phù hợp với bộ lọc")
     
-    with tab5:
+    with tab4:
         st.subheader("⚙️ Cài đặt hệ thống")
         
         col1, col2 = st.columns(2)
@@ -1266,7 +950,6 @@ def main():
             st.success("✅ API Connection: Active")
             st.success("✅ Data Cache: Active")
             st.success("✅ Environment Variables: Loaded")
-            st.success("✅ AI Classification: Enabled")
             st.info(f"🕒 Last Update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 if __name__ == "__main__":
