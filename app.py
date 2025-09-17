@@ -270,7 +270,7 @@ def get_metatype_info():
     }
 
 def convert_df_to_calendar_events(df):
-    """Chuyển DataFrame thành format events cho calendar với tối ưu hiển thị text"""
+    """Chuyển DataFrame thành format events cho calendar với xử lý text truncation"""
     events = []
     
     if df.empty:
@@ -289,35 +289,40 @@ def convert_df_to_calendar_events(df):
                 color = state_info.get(row['state'], {}).get('color', '#007bff')
                 icon = state_info.get(row['state'], {}).get('icon', '📅')
             
-            # Tối ưu title để tránh bị cắt
-            # Rút ngắn tên nhân viên nếu quá dài
-            employee_name = row['employee_name']
-            if len(employee_name) > 15:
-                name_parts = employee_name.split()
-                if len(name_parts) > 1:
-                    # Lấy tên và chữ cái đầu họ
-                    employee_name = f"{name_parts[-1]} {name_parts[0][0]}."
+            # Check if this is a single day event
+            is_single_day = row['total_leave_days'] <= 1
+            
+            # Format title with different approach for single day vs multi day
+            if is_single_day:
+                # For single day events: use line breaks to prevent truncation
+                title = f"{icon} {row['employee_name']}"
+                
+                # Add reason or metatype on new line
+                if row['ly_do'] and row['ly_do'] != '':
+                    reason_short = row['ly_do'][:20] + "..." if len(row['ly_do']) > 20 else row['ly_do']
+                    title += f"\n{reason_short}"
                 else:
-                    employee_name = employee_name[:12] + "..."
-            
-            # Format title với xuống dòng
-            title = f"{icon} {employee_name}"
-            
-            # Thêm thông tin lý do hoặc loại nghỉ với xuống dòng
-            if row['ly_do'] and row['ly_do'] != '':
-                reason = row['ly_do']
-                if len(reason) > 20:
-                    reason = reason[:17] + "..."
-                title += f"\n{reason}"
+                    metatype_label = metatype_info.get(row['metatype'], {}).get('label', row['metatype'].title())
+                    title += f"\n{metatype_label}"
+                
+                # Add days info on same line as reason for single day
+                if row['total_leave_days'] > 0:
+                    title += f" ({row['total_leave_days']} ngày)"
             else:
-                metatype_label = metatype_info.get(row['metatype'], {}).get('label', row['metatype'].title())
-                if len(metatype_label) > 20:
-                    metatype_label = metatype_label[:17] + "..."
-                title += f"\n{metatype_label}"
-            
-            # Thêm số ngày với xuống dòng
-            if row['total_leave_days'] > 0:
-                title += f"\n({row['total_leave_days']} ngày)"
+                # For multi-day events: keep on same line to show full duration
+                title = f"{icon} {row['employee_name']}"
+                
+                # Add reason if available
+                if row['ly_do'] and row['ly_do'] != '':
+                    reason_short = row['ly_do'][:25] + "..." if len(row['ly_do']) > 25 else row['ly_do']
+                    title += f" - {reason_short}"
+                else:
+                    metatype_label = metatype_info.get(row['metatype'], {}).get('label', row['metatype'].title())
+                    title += f" - {metatype_label}"
+                
+                # Add days info
+                if row['total_leave_days'] > 0:
+                    title += f" ({row['total_leave_days']} ngày)"
             
             # Create comprehensive event
             event = {
@@ -451,7 +456,7 @@ def display_event_details(event_data):
 def main():
     """Main dashboard"""
     
-    # Custom CSS cho calendar và hiển thị text tốt hơn
+    # Custom CSS for better UI and calendar text wrapping
     st.markdown("""
     <style>
     .main-header {
@@ -487,56 +492,44 @@ def main():
         border-radius: 5px;
     }
     
-    /* Tối ưu CSS cho calendar events */
+    /* Custom styles for calendar to handle text wrapping */
     .fc-event {
-        font-size: 11px !important;
+        font-size: 12px !important;
         border-radius: 6px !important;
         border: none !important;
         padding: 2px 4px !important;
         font-weight: 500 !important;
         box-shadow: 0 1px 3px rgba(0,0,0,0.2) !important;
         transition: all 0.2s ease !important;
-        white-space: pre-line !important;
-        line-height: 1.2 !important;
+        white-space: pre-line !important; /* Allow line breaks */
         overflow: hidden !important;
         text-overflow: ellipsis !important;
-        min-height: 20px !important;
+        max-height: 60px !important; /* Limit height to prevent overflow */
+        line-height: 1.2 !important;
     }
     
     .fc-event:hover {
         transform: translateY(-1px) !important;
         box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
-        z-index: 1000 !important;
     }
     
     .fc-event-title {
         font-weight: 600 !important;
-        white-space: pre-line !important;
+        white-space: pre-line !important; /* Allow line breaks in title */
         overflow: hidden !important;
-        text-overflow: ellipsis !important;
-        line-height: 1.1 !important;
+        display: -webkit-box !important;
+        -webkit-line-clamp: 3 !important; /* Limit to 3 lines */
+        -webkit-box-orient: vertical !important;
     }
     
     .fc-daygrid-event {
         margin: 1px 2px !important;
-        min-height: 22px !important;
+        min-height: 18px !important;
     }
     
-    .fc-daygrid-event-harness {
-        margin-bottom: 2px !important;
-    }
-    
-    /* Tăng chiều cao của calendar cells */
-    .fc-daygrid-day {
-        min-height: 80px !important;
-    }
-    
-    .fc-daygrid-day-frame {
-        min-height: 80px !important;
-    }
-    
-    .fc-daygrid-day-events {
-        margin-bottom: 2px !important;
+    /* Make single day events taller to accommodate wrapped text */
+    .fc-daygrid-event.fc-event-start.fc-event-end {
+        min-height: 36px !important;
     }
     
     .fc-button-primary {
@@ -567,13 +560,6 @@ def main():
     
     .fc-day-today {
         background-color: rgba(102, 126, 234, 0.1) !important;
-    }
-    
-    /* Responsive font size */
-    @media (max-width: 768px) {
-        .fc-event {
-            font-size: 10px !important;
-        }
     }
     </style>
     """, unsafe_allow_html=True)
@@ -751,15 +737,19 @@ def main():
             show_legend = st.checkbox("Hiển thị chú thích", value=True)
             show_weekend = st.checkbox("Hiển thị cuối tuần", value=True)
         
+        # Show legend if enabled
+        if show_legend:
+            display_calendar_legend()
+        
         # Convert data to events
         events = convert_df_to_calendar_events(filtered_df)
         
-        # Enhanced calendar options với tối ưu hiển thị
+        # Enhanced calendar options
         calendar_options = {
             "editable": False,
             "navLinks": True,
             "selectable": False,
-            "dayMaxEvents": 5,  # Tăng số events tối đa
+            "dayMaxEvents": 4,  # Increased to accommodate wrapped text
             "moreLinkClick": "popover",
             "eventDisplay": "block",
             "displayEventTime": False,
@@ -775,7 +765,7 @@ def main():
                 "right": ""
             },
             "initialView": mode,
-            "height": 750,  # Tăng chiều cao
+            "height": 700,
             "eventMouseEnter": True,
             "eventMouseLeave": True,
             "locale": "vi",
@@ -785,10 +775,7 @@ def main():
                 "week": "Tuần", 
                 "day": "Ngày",
                 "list": "Danh sách"
-            },
-            "dayMaxEventRows": 4,  # Giới hạn số dòng events
-            "moreLinkText": "thêm",  # Text cho link "more"
-            "eventMinHeight": 20,  # Chiều cao tối thiểu của event
+            }
         }
         
         # Display calendar
@@ -811,10 +798,6 @@ def main():
         else:
             st.info("📅 Không có dữ liệu time off trong khoảng thời gian được chọn")
             st.markdown("**Gợi ý:** Thử điều chỉnh bộ lọc để xem thêm dữ liệu")
-        
-        # Hiển thị chú thích nếu được chọn
-        if show_legend:
-            display_calendar_legend()
     
     with tab2:
         st.subheader("📊 Phân tích dữ liệu")
