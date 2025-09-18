@@ -375,6 +375,16 @@ class TimeoffProcessor:
                 username = timeoff.get('username', '')
                 employee_name = self.employee_manager.get_name_by_username(username)
                 
+                # Chuyển đổi timestamp thành datetime và cộng thêm 1 ngày
+                start_date = self.convert_timestamp_to_date(timeoff.get('start_date'))
+                end_date = self.convert_timestamp_to_date(timeoff.get('end_date'))
+                
+                # Cộng thêm 1 ngày cho cả start_date và end_date
+                if start_date:
+                    start_date = start_date + timedelta(days=1)
+                if end_date:
+                    end_date = end_date + timedelta(days=1)
+                
                 timeoff_record = {
                     'id': timeoff.get('id'),
                     'employee_name': employee_name,
@@ -382,8 +392,8 @@ class TimeoffProcessor:
                     'state': timeoff.get('state'),
                     'metatype': timeoff.get('metatype'),
                     'paid_timeoff': timeoff.get('paid_timeoff'),
-                    'start_date': self.convert_timestamp_to_date(timeoff.get('start_date')),
-                    'end_date': self.convert_timestamp_to_date(timeoff.get('end_date')),
+                    'start_date': start_date,
+                    'end_date': end_date,
                     'total_leave_days': total_leave_days,
                     'total_shifts': total_shifts,
                     'approvals': approval_names,
