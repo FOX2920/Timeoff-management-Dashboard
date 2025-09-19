@@ -508,16 +508,6 @@ def get_metatype_info():
         'funeral': {'color': '#6c757d', 'icon': '🕊️', 'label': 'Nghỉ tang'}
     }
 
-def parse_shift_time(shift_str):
-    """Parse shift string like '8:00-12:00' to return start and end time"""
-    try:
-        if '-' in shift_str:
-            start_str, end_str = shift_str.split('-')
-            return start_str.strip(), end_str.strip()
-    except:
-        pass
-    return None, None
-
 def convert_df_to_calendar_events(df, use_reason_classification=True):
     """Chuyển DataFrame thành format events cho calendar với phân loại lý do bằng cosine similarity"""
     events = []
@@ -563,7 +553,7 @@ def convert_df_to_calendar_events(df, use_reason_classification=True):
             
             # Add reason if available
             if row['ly_do'] and row['ly_do'] != '':
-                reason_short = row['ly_do'][:15] + "..." if len(row['ly_do']) > 15 else row['ly_do']
+                reason_short = row['ly_do'][:25] + "..." if len(row['ly_do']) > 25 else row['ly_do']
                 title += f" - {reason_short}"
                 if use_reason_classification:
                     title += classification_info
@@ -574,76 +564,36 @@ def convert_df_to_calendar_events(df, use_reason_classification=True):
                 else:
                     title += classification_info
             
-            # Get buoi_nghi data
-            buoi_nghi = row.get('buoi_nghi', [])
+            # Add days info
+            if row['total_leave_days'] > 0:
+                title += f" ({row['total_leave_days']} ngày)"
             
-            # Prepare common event properties
-            common_props = {
-                "id": row['id'],
-                "employee": row['employee_name'],
-                "state": row['state'],
-                "metatype": row['metatype'],
-                "days": row['total_leave_days'],
-                "reason": row['ly_do'],
-                "buoi_nghi": buoi_nghi,
-                "approver": row['final_approver'],
-                "created_time": row['created_time'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['created_time']) else 'N/A',
-                "last_update": row['last_update'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['last_update']) else 'N/A',
-                "paid": row['paid_timeoff'] if 'paid_timeoff' in row else False,
-                "classification": classification_info,
-                "similarity_score": similarity_score
+            # Create comprehensive event
+            event = {
+                "title": title,
+                "start": row['start_date'].strftime('%Y-%m-%d'),
+                "end": (row['end_date'] + timedelta(days=1)).strftime('%Y-%m-%d'),
+                "color": color,
+                "borderColor": color,
+                "textColor": "#ffffff",
+                "extendedProps": {
+                    "id": row['id'],
+                    "employee": row['employee_name'],
+                    "state": row['state'],
+                    "metatype": row['metatype'],
+                    "days": row['total_leave_days'],
+                    "reason": row['ly_do'],
+                    "buoi_nghi": row.get('buoi_nghi', []),  # Thêm buoi_nghi với safe access
+                    "approver": row['final_approver'],
+                    "created_time": row['created_time'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['created_time']) else 'N/A',
+                    "last_update": row['last_update'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['last_update']) else 'N/A',
+                    "paid": row['paid_timeoff'] if 'paid_timeoff' in row else False,
+                    "classification": classification_info,
+                    "similarity_score": similarity_score
+                },
+                "display": "block"
             }
-            
-            # Create events based on buoi_nghi
-            if buoi_nghi and isinstance(buoi_nghi, list) and len(buoi_nghi) > 0:
-                # Có thông tin buổi nghỉ cụ thể - tạo events theo thời gian
-                current_date = row['start_date']
-                
-                while current_date <= row['end_date']:
-                    date_str = current_date.strftime('%Y-%m-%d')
-                    
-                    for shift in buoi_nghi:
-                        start_time, end_time = parse_shift_time(shift)
-                        
-                        if start_time and end_time:
-                            # Tạo event có thời gian cụ thể
-                            event = {
-                                "title": f"{title} ({shift})",
-                                "start": f"{date_str}T{start_time}:00",
-                                "end": f"{date_str}T{end_time}:00",
-                                "color": color,
-                                "borderColor": color,
-                                "textColor": "#ffffff",
-                                "extendedProps": common_props.copy()
-                            }
-                            events.append(event)
-                        else:
-                            # Fallback: tạo all-day event nếu không parse được thời gian
-                            event = {
-                                "title": f"{title} ({shift})",
-                                "start": date_str,
-                                "color": color,
-                                "borderColor": color,
-                                "textColor": "#ffffff",
-                                "extendedProps": common_props.copy(),
-                                "allDay": True
-                            }
-                            events.append(event)
-                    
-                    current_date += timedelta(days=1)
-            else:
-                # Không có thông tin buổi nghỉ hoặc dữ liệu không hợp lệ - tạo all-day event
-                event = {
-                    "title": title,
-                    "start": row['start_date'].strftime('%Y-%m-%d'),
-                    "end": (row['end_date'] + timedelta(days=1)).strftime('%Y-%m-%d'),
-                    "color": color,
-                    "borderColor": color,
-                    "textColor": "#ffffff",
-                    "extendedProps": common_props,
-                    "allDay": True
-                }
-                events.append(event)
+            events.append(event)
     
     return events
 
