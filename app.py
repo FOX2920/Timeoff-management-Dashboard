@@ -26,78 +26,74 @@ class ReasonClassifier:
     """Class để phân loại lý do nghỉ bằng cosine similarity"""
     
     def __init__(self):
-        # Định nghĩa categories và từ khóa đại diện
+        # Định nghĩa categories và từ khóa đại diện theo yêu cầu mới
         self.categories = {
-            'sick': {
+            'annual_leave': {
                 'keywords': [
-                    'ốm', 'bệnh', 'đau', 'sốt', 'cảm', 'ho', 'khám bệnh', 'chữa bệnh',
-                    'bác sĩ', 'bệnh viện', 'phòng khám', 'điều trị', 'thuốc', 'y tế',
-                    'sức khỏe', 'không khỏe', 'mệt', 'kiệt sức', 'stress', 'lo âu'
+                    'phép năm', 'nghỉ phép', 'annual leave', 'vacation', 'holiday',
+                    'du lịch', 'đi chơi', 'nghỉ mát', 'resort', 'biển', 'núi',
+                    'về quê', 'thăm quê', 'nghỉ dưỡng', 'thư giãn', 'relax',
+                    'break', 'nghỉ ngơi', 'rest', 'phục hồi', 'tái tạo năng lượng'
                 ],
-                'color': '#dc3545',  # Đỏ
-                'icon': '🤒',
-                'label': 'Sức khỏe'
-            },
-            'family': {
-                'keywords': [
-                    'gia đình', 'bố', 'mẹ', 'con', 'vợ', 'chồng', 'anh', 'chị', 'em',
-                    'ông', 'bà', 'cháu', 'họp mặt gia đình', 'việc gia đình', 'chăm sóc',
-                    'tang lễ', 'đám tang', 'đám cưới', 'lễ gia đình', 'sinh nhật',
-                    'kỷ niệm', 'cha mẹ', 'con cái', 'người thân'
-                ],
-                'color': '#e83e8c',  # Hồng
-                'icon': '👨‍👩‍👧‍👦',
-                'label': 'Gia đình'
+                'color': '#28a745',  # Xanh lá
+                'icon': '🏖️',
+                'label': 'Phép năm'
             },
             'personal': {
                 'keywords': [
                     'cá nhân', 'việc riêng', 'bận việc cá nhân', 'công việc cá nhân',
                     'giải quyết việc', 'làm việc cá nhân', 'việc tư', 'tự do',
-                    'nghỉ ngơi', 'thư giãn', 'du lịch cá nhân', 'mua sắm'
+                    'mua sắm', 'đi ngân hàng', 'làm giấy tờ', 'visa', 'hộ chiếu',
+                    'sửa nhà', 'chuyển nhà', 'dọn nhà', 'việc nhà'
                 ],
                 'color': '#6f42c1',  # Tím
                 'icon': '👤',
                 'label': 'Cá nhân'
             },
-            'travel': {
+            'remote': {
                 'keywords': [
-                    'du lịch', 'đi chơi', 'nghỉ mát', 'vacation', 'tour', 'picnic',
-                    'về quê', 'thăm quê', 'đi xa', 'ra ngoài', 'nghỉ dưỡng',
-                    'resort', 'biển', 'núi', 'thành phố khác', 'tỉnh khác'
+                    'remote', 'work from home', 'wfh', 'làm việc từ xa',
+                    'làm việc tại nhà', 'online', 'từ xa', 'không đến công ty',
+                    'ở nhà làm việc', 'home office', 'telecommuting', 'virtual work'
                 ],
-                'color': '#20c997',  # Xanh lá nhạt
-                'icon': '✈️',
-                'label': 'Du lịch'
-            },
-            'emergency': {
-                'keywords': [
-                    'khẩn cấp', 'gấp', 'emergency', 'cứu cấp', 'tai nạn', 'sự cố',
-                    'bất ngờ', 'đột xuất', 'không thể đến', 'không thể làm',
-                    'hỏa hoạn', 'thiên tai', 'mất mát', 'việc quan trọng'
-                ],
-                'color': '#fd7e14',  # Cam
-                'icon': '🚨',
-                'label': 'Khẩn cấp'
+                'color': '#17a2b8',  # Xanh dương nhạt
+                'icon': '💻',
+                'label': 'Remote'
             },
             'business': {
                 'keywords': [
-                    'công tác', 'công việc', 'meeting', 'họp', 'hội nghị', 'đào tạo',
-                    'khóa học', 'seminar', 'conference', 'business', 'làm việc ngoài',
-                    'gặp khách hàng', 'partner', 'đối tác', 'dự án', 'project'
+                    'công tác', 'business trip', 'công việc', 'meeting', 'họp',
+                    'hội nghị', 'đào tạo', 'khóa học', 'seminar', 'conference',
+                    'gặp khách hàng', 'partner', 'đối tác', 'dự án', 'project',
+                    'ra ngoài công tác', 'đi công tác', 'business'
                 ],
-                'color': '#17a2b8',  # Xanh dương nhạt
+                'color': '#fd7e14',  # Cam
                 'icon': '💼',
                 'label': 'Công tác'
             },
-            'rest': {
+            'sick': {
                 'keywords': [
-                    'nghỉ', 'rest', 'tired', 'mệt', 'cần nghỉ', 'nghỉ ngơi',
-                    'phục hồi', 'tái tạo năng lượng', 'thư giãn', 'relax',
-                    'break', 'recharge', 'refresh', 'recovery'
+                    'ốm', 'bệnh', 'đau', 'sốt', 'cảm', 'ho', 'khám bệnh', 'chữa bệnh',
+                    'bác sĩ', 'bệnh viện', 'phòng khám', 'điều trị', 'thuốc', 'y tế',
+                    'sức khỏe', 'không khỏe', 'mệt', 'kiệt sức', 'stress', 'lo âu',
+                    'sick', 'ill', 'medical', 'doctor', 'hospital'
                 ],
-                'color': '#28a745',  # Xanh lá
-                'icon': '😴',
-                'label': 'Nghỉ ngơi'
+                'color': '#dc3545',  # Đỏ
+                'icon': '🤒',
+                'label': 'Đau ốm'
+            },
+            'special_leave': {
+                'keywords': [
+                    'thai sản', 'sinh con', 'maternity', 'paternity', 'đám cưới', 'cưới',
+                    'wedding', 'đám tang', 'tang lễ', 'funeral', 'ma chay', 'hiếu hỷ',
+                    'gia đình', 'bố', 'mẹ', 'con', 'vợ', 'chồng', 'ông', 'bà', 'cháu',
+                    'họp mặt gia đình', 'việc gia đình', 'chăm sóc', 'người thân',
+                    'khẩn cấp', 'gấp', 'emergency', 'cứu cấp', 'tai nạn', 'sự cố',
+                    'bất ngờ', 'đột xuất'
+                ],
+                'color': '#e83e8c',  # Hồng
+                'icon': '👨‍👩‍👧‍👦',
+                'label': 'Chế độ đặc biệt'
             }
         }
         
@@ -685,7 +681,7 @@ def display_calendar_legend(show_reason_classification=True):
             'label': 'Khác'
         }))
         
-        mid_point = len(categories) // 2
+        mid_point = len(categories) // 2 + 1  # Adjust for odd number of categories
         
         with col1:
             for category, info in categories[:mid_point]:
