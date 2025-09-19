@@ -33,7 +33,9 @@ class ReasonClassifier:
                     'phép năm', 'nghỉ phép', 'annual leave', 'vacation', 'holiday',
                     'du lịch', 'đi chơi', 'nghỉ mát', 'resort', 'biển', 'núi',
                     'về quê', 'thăm quê', 'nghỉ dưỡng', 'thư giãn', 'relax',
-                    'break', 'nghỉ ngơi', 'rest', 'phục hồi', 'tái tạo năng lượng'
+                    'break', 'nghỉ ngơi', 'rest', 'phục hồi', 'tái tạo năng lượng',
+                    'đi du lịch', 'travel', 'trip', 'picnic', 'tour', 'khám phá',
+                    'nghỉ lễ', 'long weekend', 'nghỉ cuối tuần', 'staycation'
                 ],
                 'color': '#28a745',  # Xanh lá
                 'icon': '🏖️',
@@ -52,7 +54,7 @@ class ReasonClassifier:
             },
             'remote': {
                 'keywords': [
-                    'remote', 'work from home', 'wfh', 'làm việc từ xa',
+                    'remote', 'work from home', 'wfh', 'làm việc từ xa','outside',
                     'làm việc tại nhà', 'online', 'từ xa', 'không đến công ty',
                     'ở nhà làm việc', 'home office', 'telecommuting', 'virtual work'
                 ],
@@ -76,7 +78,10 @@ class ReasonClassifier:
                     'ốm', 'bệnh', 'đau', 'sốt', 'cảm', 'ho', 'khám bệnh', 'chữa bệnh',
                     'bác sĩ', 'bệnh viện', 'phòng khám', 'điều trị', 'thuốc', 'y tế',
                     'sức khỏe', 'không khỏe', 'mệt', 'kiệt sức', 'stress', 'lo âu',
-                    'sick', 'ill', 'medical', 'doctor', 'hospital'
+                    'sick', 'ill', 'medical', 'doctor', 'hospital', 'fever', 'cold',
+                    'đau đầu', 'đau bụng', 'đau răng', 'cúm', 'viêm họng', 'ho khan',
+                    'sốt cao', 'sốt nhẹ', 'cảm lạnh', 'cảm cúm', 'không được khỏe',
+                    'đi khám', 'tái khám', 'xét nghiệm', 'chụp phim', 'siêu âm'
                 ],
                 'color': '#dc3545',  # Đỏ
                 'icon': '🤒',
@@ -133,9 +138,9 @@ class ReasonClassifier:
         
         return text
     
-    def classify_reason(self, reason: str, threshold: float = 0.1) -> Dict:
+    def classify_reason(self, reason: str, threshold: float = 0.15) -> Dict:
         """
-        Phân loại lý do nghỉ bằng cosine similarity
+        Phân loại lý do nghỉ bằng cosine similarity với rule-based fallback
         
         Args:
             reason: Lý do nghỉ
@@ -152,6 +157,11 @@ class ReasonClassifier:
         
         if not processed_reason:
             return self.get_default_category()
+        
+        # Rule-based classification trước (cho các trường hợp rõ ràng)
+        rule_based_result = self._rule_based_classify(processed_reason)
+        if rule_based_result:
+            return rule_based_result
         
         try:
             # Vector hóa reason
@@ -177,6 +187,59 @@ class ReasonClassifier:
         except Exception as e:
             print(f"Error in classify_reason: {e}")
             return self.get_default_category()
+    
+    def _rule_based_classify(self, processed_reason: str) -> Optional[Dict]:
+        """
+        Rule-based classification cho các trường hợp rõ ràng
+        
+        Args:
+            processed_reason: Lý do đã được tiền xử lý
+            
+        Returns:
+            Dict chứa thông tin category nếu match, None nếu không
+        """
+        # Sick leave patterns (ưu tiên cao nhất)
+        sick_patterns = [
+            r'\b(ốm|bệnh|đau|sốt|ho|cảm|không khỏe|sick|ill|fever)\b',
+            r'\b(khám bệnh|chữa bệnh|bác sĩ|bệnh viện|phòng khám|doctor|hospital)\b',
+            r'\b(thuốc|điều trị|y tế|sức khỏe|medical)\b'
+        ]
+        
+        for pattern in sick_patterns:
+            if re.search(pattern, processed_reason, re.IGNORECASE):
+                sick_info = self.categories['sick'].copy()
+                sick_info['similarity'] = 0.95  # High confidence for rule-based
+                sick_info['category'] = 'sick'
+                return sick_info
+        
+        # Remote work patterns
+        remote_patterns = [
+            r'\b(remote|wfh|work from home|làm việc tại nhà|làm việc từ xa)\b',
+            r'\b(ở nhà làm việc|không đến công ty|home office)\b'
+        ]
+        
+        for pattern in remote_patterns:
+            if re.search(pattern, processed_reason, re.IGNORECASE):
+                remote_info = self.categories['remote'].copy()
+                remote_info['similarity'] = 0.90
+                remote_info['category'] = 'remote'
+                return remote_info
+        
+        # Business trip patterns
+        business_patterns = [
+            r'\b(công tác|business trip|meeting|họp|hội nghị)\b',
+            r'\b(gặp khách hàng|partner|đối tác|conference)\b',
+            r'\b(ra ngoài công tác|đi công tác)\b'
+        ]
+        
+        for pattern in business_patterns:
+            if re.search(pattern, processed_reason, re.IGNORECASE):
+                business_info = self.categories['business'].copy()
+                business_info['similarity'] = 0.88
+                business_info['category'] = 'business'
+                return business_info
+        
+        return None
     
     def get_default_category(self) -> Dict:
         """Trả về category mặc định"""
