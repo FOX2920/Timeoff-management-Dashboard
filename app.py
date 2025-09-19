@@ -583,7 +583,7 @@ def convert_df_to_calendar_events(df, use_reason_classification=True):
                     "metatype": row['metatype'],
                     "days": row['total_leave_days'],
                     "reason": row['ly_do'],
-                    "buoi_nghi": row['buoi_nghi'],  # Thêm buoi_nghi
+                    "buoi_nghi": row.get('buoi_nghi', []),  # Thêm buoi_nghi với safe access
                     "approver": row['final_approver'],
                     "created_time": row['created_time'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['created_time']) else 'N/A',
                     "last_update": row['last_update'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['last_update']) else 'N/A',
@@ -672,7 +672,7 @@ def display_event_details(event_data):
         
         # Hiển thị buổi nghỉ
         buoi_nghi = props.get('buoi_nghi', [])
-        if buoi_nghi:
+        if buoi_nghi and isinstance(buoi_nghi, list):
             buoi_nghi_str = ', '.join(buoi_nghi)
             st.success(f"**⏰ Buổi nghỉ:** {buoi_nghi_str}")
         else:
@@ -801,7 +801,10 @@ def display_buoi_nghi_analysis(df):
         return
     
     # Lọc ra những record có buoi_nghi
-    df_with_buoi = df[df['buoi_nghi'].notna() & (df['buoi_nghi'].astype(str) != '[]')]
+    if 'buoi_nghi' in df.columns:
+        df_with_buoi = df[df['buoi_nghi'].notna() & (df['buoi_nghi'].astype(str) != '[]')]
+    else:
+        df_with_buoi = pd.DataFrame()  # Empty DataFrame if column doesn't exist
     
     if df_with_buoi.empty:
         st.info("Không có dữ liệu buổi nghỉ")
@@ -1433,3 +1436,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+            
