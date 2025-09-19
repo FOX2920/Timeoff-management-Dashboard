@@ -420,7 +420,7 @@ class TimeoffProcessor:
             (df_copy['ly_do'] == '') & 
             (df_copy['metatype'] == 'outside')
         )
-        df_copy.loc[outside_mask, 'ly_do'] = 'outside'
+        df_copy.loc[outside_mask, 'ly_do'] = 'remote'
         
         columns_to_drop = [col for col in priority_columns if col in df_copy.columns]
         if columns_to_drop:
