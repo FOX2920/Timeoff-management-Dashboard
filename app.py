@@ -340,6 +340,13 @@ class TimeoffProcessor:
             (df_copy['metatype'] == 'business')
         )
         df_copy.loc[business_mask, 'ly_do'] = 'business'
+
+        # Special case: nếu metatype là business và ly_do vẫn rỗng, đặt ly_do = "business"
+        business_mask = (
+            (df_copy['ly_do'] == '') & 
+            (df_copy['metatype'] == 'outside')
+        )
+        df_copy.loc[business_mask, 'ly_do'] = 'outside'
         
         columns_to_drop = [col for col in priority_columns if col in df_copy.columns]
         if columns_to_drop:
