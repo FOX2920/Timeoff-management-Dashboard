@@ -54,7 +54,7 @@ class ReasonClassifier:
             },
             'remote': {
                 'keywords': [
-                    'remote', 'work from home', 'wfh', 'làm việc từ xa','outside',
+                    'remote', 'work from home', 'wfh', 'làm việc từ xa',
                     'làm việc tại nhà', 'online', 'từ xa', 'không đến công ty',
                     'ở nhà làm việc', 'home office', 'telecommuting', 'virtual work'
                 ],
@@ -1262,7 +1262,7 @@ def main():
             "dayMaxEvents": 3,
             "moreLinkClick": "popover",
             "eventDisplay": "block",
-            "displayEventTime": True,  # Enable time display
+            "displayEventTime": mode == "timeGridWeek",  # Chỉ hiển thị thời gian ở chế độ tuần theo giờ
             "weekends": show_weekend,
             "headerToolbar": {
                 "left": "today prev,next",
