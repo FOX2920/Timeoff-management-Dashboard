@@ -54,7 +54,7 @@ class ReasonClassifier:
             },
             'remote': {
                 'keywords': [
-                    'remote', 'work from home', 'wfh', 'làm việc từ xa',
+                    'remote', 'work from home', 'wfh', 'làm việc từ xa','outside',
                     'làm việc tại nhà', 'online', 'từ xa', 'không đến công ty',
                     'ở nhà làm việc', 'home office', 'telecommuting', 'virtual work'
                 ],
