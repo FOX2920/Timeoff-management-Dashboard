@@ -287,6 +287,21 @@ class TimeoffProcessor:
                 form_data[form_item['name']] = form_item['value']
         return form_data
     
+    def extract_shift_values(self, shifts_data):
+        """Extract shift values từ shifts data và trả về list"""
+        shift_values = []
+        
+        if not shifts_data or not isinstance(shifts_data, list):
+            return shift_values
+        
+        for shift_day in shifts_data:
+            shifts = shift_day.get('shifts', [])
+            for shift in shifts:
+                if shift.get('value'):
+                    shift_values.append(shift['value'])
+        
+        return shift_values
+    
     def clean_vietnamese_text(self, text):
         """Clean Vietnamese text for column names"""
         text = unicodedata.normalize('NFD', text)
@@ -341,12 +356,12 @@ class TimeoffProcessor:
         )
         df_copy.loc[business_mask, 'ly_do'] = 'business'
 
-        # Special case: nếu metatype là business và ly_do vẫn rỗng, đặt ly_do = "business"
-        business_mask = (
+        # Special case: nếu metatype là outside và ly_do vẫn rỗng, đặt ly_do = "outside"
+        outside_mask = (
             (df_copy['ly_do'] == '') & 
             (df_copy['metatype'] == 'outside')
         )
-        df_copy.loc[business_mask, 'ly_do'] = 'outside'
+        df_copy.loc[outside_mask, 'ly_do'] = 'outside'
         
         columns_to_drop = [col for col in priority_columns if col in df_copy.columns]
         if columns_to_drop:
@@ -392,6 +407,9 @@ class TimeoffProcessor:
                 if end_date:
                     end_date = end_date + timedelta(days=1)
                 
+                # Extract buoi_nghi từ shifts data
+                buoi_nghi = self.extract_shift_values(timeoff.get('shifts', []))
+                
                 timeoff_record = {
                     'id': timeoff.get('id'),
                     'employee_name': employee_name,
@@ -403,6 +421,7 @@ class TimeoffProcessor:
                     'end_date': end_date,
                     'total_leave_days': total_leave_days,
                     'total_shifts': total_shifts,
+                    'buoi_nghi': buoi_nghi,  # Thêm trường buoi_nghi
                     'approvals': approval_names,
                     'final_approver': final_approver_name,
                     'workflow': timeoff.get('workflow'),
@@ -564,6 +583,7 @@ def convert_df_to_calendar_events(df, use_reason_classification=True):
                     "metatype": row['metatype'],
                     "days": row['total_leave_days'],
                     "reason": row['ly_do'],
+                    "buoi_nghi": row['buoi_nghi'],  # Thêm buoi_nghi
                     "approver": row['final_approver'],
                     "created_time": row['created_time'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['created_time']) else 'N/A',
                     "last_update": row['last_update'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['last_update']) else 'N/A',
@@ -649,6 +669,14 @@ def display_event_details(event_data):
         st.info(f"**Từ ngày:** {event_data.get('start', 'N/A')}\n"
                 f"**Đến ngày:** {event_data.get('end', 'N/A')}\n"
                 f"**Số ngày:** {props.get('days', 0)} ngày")
+        
+        # Hiển thị buổi nghỉ
+        buoi_nghi = props.get('buoi_nghi', [])
+        if buoi_nghi:
+            buoi_nghi_str = ', '.join(buoi_nghi)
+            st.success(f"**⏰ Buổi nghỉ:** {buoi_nghi_str}")
+        else:
+            st.info("**⏰ Buổi nghỉ:** Không có thông tin")
         
         st.markdown("**📊 Trạng thái & Loại:**")
         status_color = state_display.get('color', '#007bff')
@@ -763,6 +791,103 @@ def display_reason_analysis(df):
         for i, (category, data) in enumerate(sorted_categories[:5]):
             percentage = (data['count'] / total_classified * 100) if total_classified > 0 else 0
             st.markdown(f"**{i+1}.** {data['icon']} {data['label']}: {data['count']} ({percentage:.1f}%)")
+
+def display_buoi_nghi_analysis(df):
+    """Hiển thị phân tích buổi nghỉ"""
+    st.markdown("### ⏰ Phân tích buổi nghỉ")
+    
+    if df.empty or 'buoi_nghi' not in df.columns:
+        st.info("Không có dữ liệu buổi nghỉ để phân tích")
+        return
+    
+    # Lọc ra những record có buoi_nghi
+    df_with_buoi = df[df['buoi_nghi'].notna() & (df['buoi_nghi'].astype(str) != '[]')]
+    
+    if df_with_buoi.empty:
+        st.info("Không có dữ liệu buổi nghỉ")
+        return
+    
+    # Phân tích buổi nghỉ
+    shift_counts = {}
+    shift_combinations = {}
+    
+    for idx, row in df_with_buoi.iterrows():
+        buoi_nghi = row['buoi_nghi']
+        if isinstance(buoi_nghi, list) and buoi_nghi:
+            # Đếm từng buổi
+            for shift in buoi_nghi:
+                if shift not in shift_counts:
+                    shift_counts[shift] = 0
+                shift_counts[shift] += 1
+            
+            # Đếm combination
+            combination_key = ' + '.join(sorted(buoi_nghi))
+            if combination_key not in shift_combinations:
+                shift_combinations[combination_key] = 0
+            shift_combinations[combination_key] += 1
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Biểu đồ buổi nghỉ đơn lẻ
+        if shift_counts:
+            shifts = list(shift_counts.keys())
+            counts = list(shift_counts.values())
+            
+            fig1 = px.bar(
+                x=shifts,
+                y=counts,
+                title="📊 Tần suất buổi nghỉ",
+                labels={'x': 'Buổi', 'y': 'Số lần'},
+                color=counts,
+                color_continuous_scale="Blues"
+            )
+            fig1.update_layout(height=400, showlegend=False)
+            st.plotly_chart(fig1, use_container_width=True)
+    
+    with col2:
+        # Biểu đồ combination
+        if shift_combinations:
+            combinations = list(shift_combinations.keys())[:10]  # Top 10
+            combo_counts = [shift_combinations[combo] for combo in combinations]
+            
+            fig2 = px.bar(
+                x=combo_counts,
+                y=combinations,
+                orientation='h',
+                title="🔄 Top 10 kết hợp buổi nghỉ",
+                labels={'x': 'Số lần', 'y': 'Kết hợp'},
+                color=combo_counts,
+                color_continuous_scale="Viridis"
+            )
+            fig2.update_layout(height=400, showlegend=False)
+            st.plotly_chart(fig2, use_container_width=True)
+    
+    # Thống kê chi tiết
+    st.markdown("### 📈 Thống kê buổi nghỉ:")
+    
+    col3, col4, col5 = st.columns(3)
+    
+    with col3:
+        total_shifts = sum(shift_counts.values())
+        st.metric("Tổng số buổi nghỉ", total_shifts)
+    
+    with col4:
+        unique_shifts = len(shift_counts)
+        st.metric("Số loại buổi khác nhau", unique_shifts)
+    
+    with col5:
+        avg_shifts_per_request = total_shifts / len(df_with_buoi)
+        st.metric("Trung bình buổi/yêu cầu", f"{avg_shifts_per_request:.1f}")
+    
+    # Top shifts
+    if shift_counts:
+        st.markdown("**🏆 Top buổi nghỉ phổ biến:**")
+        sorted_shifts = sorted(shift_counts.items(), key=lambda x: x[1], reverse=True)
+        
+        for i, (shift, count) in enumerate(sorted_shifts[:5]):
+            percentage = (count / total_shifts * 100) if total_shifts > 0 else 0
+            st.markdown(f"**{i+1}.** {shift}: {count} lần ({percentage:.1f}%)")
 
 def main():
     """Main dashboard"""
@@ -945,10 +1070,11 @@ def main():
         )
     
     # Tabs with improved styling
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📅 Calendar View", 
         "📊 Analytics", 
         "🤖 AI Analysis",
+        "⏰ Shift Analysis",
         "📋 Data Table", 
         "⚙️ Settings"
     ])
@@ -1175,6 +1301,9 @@ def main():
         display_reason_analysis(filtered_df)
     
     with tab4:
+        display_buoi_nghi_analysis(filtered_df)
+    
+    with tab5:
         st.subheader("📋 Bảng dữ liệu")
         
         # Display options
@@ -1188,10 +1317,10 @@ def main():
             if show_all_columns:
                 display_df = filtered_df
             else:
-                # Select important columns
+                # Select important columns including buoi_nghi
                 important_cols = [
                     'employee_name', 'state', 'metatype', 'start_date', 'end_date', 
-                    'total_leave_days', 'ly_do', 'final_approver'
+                    'total_leave_days', 'buoi_nghi', 'ly_do', 'final_approver'
                 ]
                 available_cols = [col for col in important_cols if col in filtered_df.columns]
                 display_df = filtered_df[available_cols]
@@ -1201,6 +1330,14 @@ def main():
                 display_df['start_date'] = pd.to_datetime(display_df['start_date']).dt.strftime('%Y-%m-%d')
             if 'end_date' in display_df.columns:
                 display_df['end_date'] = pd.to_datetime(display_df['end_date']).dt.strftime('%Y-%m-%d')
+            
+            # Format buoi_nghi for display
+            if 'buoi_nghi' in display_df.columns:
+                display_df_copy = display_df.copy()
+                display_df_copy['buoi_nghi'] = display_df_copy['buoi_nghi'].apply(
+                    lambda x: ', '.join(x) if isinstance(x, list) and x else 'N/A'
+                )
+                display_df = display_df_copy
             
             # Pagination
             total_rows = len(display_df)
@@ -1246,7 +1383,7 @@ def main():
         else:
             st.info("📭 Không có dữ liệu phù hợp với bộ lọc")
     
-    with tab5:
+    with tab6:
         st.subheader("⚙️ Cài đặt hệ thống")
         
         col1, col2 = st.columns(2)
@@ -1291,6 +1428,7 @@ def main():
             st.success("✅ Data Cache: Active")
             st.success("✅ Environment Variables: Loaded")
             st.success("✅ AI Classification: Enabled")
+            st.success("✅ Shift Analysis: Enabled")
             st.info(f"🕒 Last Update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 if __name__ == "__main__":
