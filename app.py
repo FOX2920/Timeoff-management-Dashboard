@@ -508,8 +508,50 @@ def get_metatype_info():
         'funeral': {'color': '#6c757d', 'icon': '🕊️', 'label': 'Nghỉ tang'}
     }
 
+def get_shift_time_range(buoi_nghi_list):
+    """
+    Phân tích buổi nghỉ và trả về thông tin thời gian cụ thể
+    
+    Args:
+        buoi_nghi_list: List các buổi nghỉ ['8:00-12:00', '13:00-17:30']
+    
+    Returns:
+        dict: {
+            'is_all_day': bool,
+            'start_time': str hoặc None,
+            'end_time': str hoặc None
+        }
+    """
+    if not buoi_nghi_list or not isinstance(buoi_nghi_list, list):
+        return {'is_all_day': True, 'start_time': None, 'end_time': None}
+    
+    # Nếu có cả 2 buổi thì hiển thị all-day
+    if len(buoi_nghi_list) >= 2:
+        return {'is_all_day': True, 'start_time': None, 'end_time': None}
+    
+    # Nếu chỉ có 1 buổi, xác định thời gian cụ thể
+    if len(buoi_nghi_list) == 1:
+        shift = buoi_nghi_list[0]
+        
+        # Mapping các buổi nghỉ với thời gian cụ thể
+        shift_time_mapping = {
+            '8:00-12:00': {'start_time': '08:00:00', 'end_time': '12:00:00'},
+            '13:00-17:30': {'start_time': '13:00:00', 'end_time': '17:30:00'}
+        }
+        
+        if shift in shift_time_mapping:
+            time_info = shift_time_mapping[shift]
+            return {
+                'is_all_day': False, 
+                'start_time': time_info['start_time'], 
+                'end_time': time_info['end_time']
+            }
+    
+    # Default case - all day
+    return {'is_all_day': True, 'start_time': None, 'end_time': None}
+
 def convert_df_to_calendar_events(df, use_reason_classification=True):
-    """Chuyển DataFrame thành format events cho calendar với phân loại lý do bằng cosine similarity"""
+    """Chuyển DataFrame thành format events cho calendar với phân loại lý do bằng cosine similarity và hiển thị thời gian cụ thể"""
     events = []
     
     if df.empty:
@@ -568,11 +610,13 @@ def convert_df_to_calendar_events(df, use_reason_classification=True):
             if row['total_leave_days'] > 0:
                 title += f" ({row['total_leave_days']} ngày)"
             
-            # Create comprehensive event
-            event = {
+            # Xử lý thời gian dựa vào buoi_nghi
+            buoi_nghi = row.get('buoi_nghi', [])
+            time_info = get_shift_time_range(buoi_nghi)
+            
+            # Create event với thời gian cụ thể hoặc all-day
+            event_base = {
                 "title": title,
-                "start": row['start_date'].strftime('%Y-%m-%d'),
-                "end": (row['end_date'] + timedelta(days=1)).strftime('%Y-%m-%d'),
                 "color": color,
                 "borderColor": color,
                 "textColor": "#ffffff",
@@ -583,7 +627,7 @@ def convert_df_to_calendar_events(df, use_reason_classification=True):
                     "metatype": row['metatype'],
                     "days": row['total_leave_days'],
                     "reason": row['ly_do'],
-                    "buoi_nghi": row.get('buoi_nghi', []),  # Thêm buoi_nghi với safe access
+                    "buoi_nghi": buoi_nghi,
                     "approver": row['final_approver'],
                     "created_time": row['created_time'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['created_time']) else 'N/A',
                     "last_update": row['last_update'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['last_update']) else 'N/A',
@@ -593,7 +637,31 @@ def convert_df_to_calendar_events(df, use_reason_classification=True):
                 },
                 "display": "block"
             }
-            events.append(event)
+            
+            if time_info['is_all_day']:
+                # All-day event
+                event_base.update({
+                    "start": row['start_date'].strftime('%Y-%m-%d'),
+                    "end": (row['end_date'] + timedelta(days=1)).strftime('%Y-%m-%d'),
+                    "allDay": True
+                })
+            else:
+                # Timed event
+                start_datetime = f"{row['start_date'].strftime('%Y-%m-%d')}T{time_info['start_time']}"
+                end_datetime = f"{row['start_date'].strftime('%Y-%m-%d')}T{time_info['end_time']}"
+                
+                event_base.update({
+                    "start": start_datetime,
+                    "end": end_datetime,
+                    "allDay": False
+                })
+                
+                # Thêm thông tin thời gian vào title
+                shift_display = ', '.join(buoi_nghi) if buoi_nghi else ''
+                if shift_display:
+                    event_base["title"] += f" [{shift_display}]"
+            
+            events.append(event_base)
     
     return events
 
@@ -666,9 +734,22 @@ def display_event_details(event_data):
     
     with col1:
         st.markdown("**📅 Thông tin thời gian:**")
-        st.info(f"**Từ ngày:** {event_data.get('start', 'N/A')}\n"
-                f"**Đến ngày:** {event_data.get('end', 'N/A')}\n"
-                f"**Số ngày:** {props.get('days', 0)} ngày")
+        
+        # Hiển thị thông tin thời gian dựa vào allDay
+        is_all_day = event_data.get('allDay', True)
+        start_time = event_data.get('start', 'N/A')
+        end_time = event_data.get('end', 'N/A')
+        
+        if is_all_day:
+            st.info(f"**Từ ngày:** {start_time}\n"
+                    f"**Đến ngày:** {end_time}\n"
+                    f"**Số ngày:** {props.get('days', 0)} ngày\n"
+                    f"**Loại:** Cả ngày")
+        else:
+            st.info(f"**Ngày:** {start_time.split('T')[0] if 'T' in start_time else start_time}\n"
+                    f"**Thời gian:** {start_time.split('T')[1][:5] if 'T' in start_time else 'N/A'} - {end_time.split('T')[1][:5] if 'T' in end_time else 'N/A'}\n"
+                    f"**Số ngày:** {props.get('days', 0)} ngày\n"
+                    f"**Loại:** Theo giờ")
         
         # Hiển thị buổi nghỉ
         buoi_nghi = props.get('buoi_nghi', [])
@@ -1122,7 +1203,7 @@ def main():
             "dayMaxEvents": 3,
             "moreLinkClick": "popover",
             "eventDisplay": "block",
-            "displayEventTime": False,
+            "displayEventTime": True,  # Enable time display
             "weekends": show_weekend,
             "headerToolbar": {
                 "left": "today prev,next",
@@ -1145,7 +1226,9 @@ def main():
                 "week": "Tuần", 
                 "day": "Ngày",
                 "list": "Danh sách"
-            }
+            },
+            "slotMinTime": "06:00:00",  # Hiển thị từ 6h sáng
+            "slotMaxTime": "20:00:00"   # Hiển thị đến 8h tối
         }
         
         # Custom CSS for calendar
@@ -1172,8 +1255,15 @@ def main():
             text-overflow: ellipsis;
             overflow: hidden;
         }
+        .fc-event-time {
+            font-weight: 700;
+            color: rgba(255, 255, 255, 0.9);
+        }
         .fc-daygrid-event {
             margin: 1px 2px;
+        }
+        .fc-timegrid-event {
+            margin: 1px;
         }
         .fc-button-primary {
             background-color: #667eea;
@@ -1198,6 +1288,10 @@ def main():
         }
         .fc-day-today {
             background-color: rgba(102, 126, 234, 0.1) !important;
+        }
+        .fc-timegrid-slot-label {
+            font-size: 12px;
+            font-weight: 500;
         }
         </style>
         """
@@ -1432,6 +1526,7 @@ def main():
             st.success("✅ Environment Variables: Loaded")
             st.success("✅ AI Classification: Enabled")
             st.success("✅ Shift Analysis: Enabled")
+            st.success("✅ Time-based Display: Enabled")
             st.info(f"🕒 Last Update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 if __name__ == "__main__":
