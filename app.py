@@ -13,6 +13,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import re
 import unicodedata
+import pytz
 
 # Cấu hình page
 st.set_page_config(
@@ -369,10 +370,13 @@ class TimeoffProcessor:
         return text
     
     def convert_timestamp_to_date(self, timestamp):
-        """Chuyển timestamp thành datetime"""
+        """Chuyển timestamp thành datetime với timezone chính xác"""
         if timestamp and timestamp != '0':
             try:
-                return datetime.fromtimestamp(int(timestamp))
+                # Sử dụng timezone Asia/Ho_Chi_Minh để tránh lệch múi giờ
+                utc_dt = datetime.fromtimestamp(int(timestamp), tz=pytz.UTC)
+                vietnam_tz = pytz.timezone('Asia/Ho_Chi_Minh')
+                return utc_dt.astimezone(vietnam_tz)
             except:
                 return None
         return None
@@ -456,15 +460,9 @@ class TimeoffProcessor:
                 username = timeoff.get('username', '')
                 employee_name = self.employee_manager.get_name_by_username(username)
                 
-                # Chuyển đổi timestamp thành datetime và cộng thêm 1 ngày
+                # Chuyển đổi timestamp thành datetime với timezone chính xác
                 start_date = self.convert_timestamp_to_date(timeoff.get('start_date'))
                 end_date = self.convert_timestamp_to_date(timeoff.get('end_date'))
-                
-                # Cộng thêm 1 ngày cho cả start_date và end_date
-                if start_date:
-                    start_date = start_date + timedelta(days=1)
-                if end_date:
-                    end_date = end_date + timedelta(days=1)
                 
                 # Extract buoi_nghi từ shifts data
                 buoi_nghi = self.extract_shift_values(timeoff.get('shifts', []))
@@ -480,7 +478,7 @@ class TimeoffProcessor:
                     'end_date': end_date,
                     'total_leave_days': total_leave_days,
                     'total_shifts': total_shifts,
-                    'buoi_nghi': buoi_nghi,  # Thêm trường buoi_nghi
+                    'buoi_nghi': buoi_nghi,
                     'approvals': approval_names,
                     'final_approver': final_approver_name,
                     'workflow': timeoff.get('workflow'),
@@ -525,6 +523,173 @@ class TimeoffProcessor:
         df = self.create_ly_do_column_and_cleanup(df)
         
         return df
+    
+    def get_shift_time_range(self, buoi_nghi_list):
+        """Phân tích buổi nghỉ và trả về thông tin thời gian - UPGRADED VERSION"""
+        if not buoi_nghi_list or not isinstance(buoi_nghi_list, list):
+            return {'is_all_day': True, 'start_time': None, 'end_time': None}
+
+        if len(buoi_nghi_list) >= 2:
+            # Nếu nghỉ cả ngày (cả 2 buổi), trả về danh sách 2 sự kiện
+            return {
+                'is_all_day': True,
+                'shift_events': [
+                    {'start_time': '08:00:00', 'end_time': '12:00:00'},
+                    {'start_time': '13:00:00', 'end_time': '17:30:00'}
+                ]
+            }
+
+        if len(buoi_nghi_list) == 1:
+            shift = buoi_nghi_list[0]
+            shift_time_mapping = {
+                '8:00-12:00': {'start_time': '08:00:00', 'end_time': '12:00:00'},
+                '13:00-17:30': {'start_time': '13:00:00', 'end_time': '17:30:00'}
+            }
+
+            if shift in shift_time_mapping:
+                time_info = shift_time_mapping[shift]
+                return {
+                    'is_all_day': False,
+                    'start_time': time_info['start_time'],
+                    'end_time': time_info['end_time']
+                }
+
+        return {'is_all_day': True, 'start_time': None, 'end_time': None}
+    
+    def process_and_structure_timeoff(self, row: pd.Series, classifier: ReasonClassifier) -> Optional[List[Dict]]:
+        """
+        Xử lý chi tiết một yêu cầu nghỉ và trả về một list các bản ghi đã được cấu trúc
+        UPGRADED: Xử lý nghỉ nhiều ngày và tạo nhiều events cho mỗi buổi
+        """
+        if pd.isna(row['start_date']) or pd.isna(row['end_date']):
+            return None
+
+        # Phân loại lý do
+        reason_result = classifier.classify_reason(str(row['ly_do'])) if row['ly_do'] and str(row['ly_do']).strip() else classifier.get_default_category()
+
+        # Tạo tiêu đề cơ bản
+        base_title = f"{reason_result['icon']} {row['employee_name']}"
+        if row['ly_do'] and row['ly_do'] != '':
+            reason_short = row['ly_do'][:50] + "..." if len(row['ly_do']) > 50 else row['ly_do']
+            base_title += f" - {reason_short}"
+        base_title += f" ({reason_result['label']})"
+
+        # Xử lý thời gian
+        buoi_nghi = row.get('buoi_nghi', [])
+        time_info = self.get_shift_time_range(buoi_nghi)
+
+        start_date = row['start_date'].date()
+        end_date = row['end_date'].date()
+        num_days = (end_date - start_date).days + 1
+
+        processed_leaves = []
+
+        # Tạo events cho từng ngày
+        for day_offset in range(num_days):
+            current_date = start_date + timedelta(days=day_offset)
+            day_label = f"Ngày {day_offset + 1}/{num_days}" if num_days > 1 else ""
+            
+            if time_info.get('shift_events'):
+                # Nghỉ cả ngày - tạo 2 bản ghi cho sáng và chiều
+                for i, shift_time in enumerate(time_info['shift_events']):
+                    shift_label = "Sáng" if i == 0 else "Chiều"
+                    title_with_day = f"{base_title}"
+                    if day_label:
+                        title_with_day += f" - {day_label} - {shift_label}"
+                    
+                    processed_leaves.append({
+                        'title': title_with_day,
+                        'start': f"{current_date.strftime('%Y-%m-%d')}T{shift_time['start_time']}",
+                        'end': f"{current_date.strftime('%Y-%m-%d')}T{shift_time['end_time']}",
+                        'color': reason_result['color'],
+                        'borderColor': reason_result['color'],
+                        'textColor': '#ffffff',
+                        'allDay': False,
+                        'extendedProps': {
+                            'id': row['id'],
+                            'employee': row['employee_name'],
+                            'state': row['state'],
+                            'metatype': row['metatype'],
+                            'days': row['total_leave_days'],
+                            'reason': row['ly_do'],
+                            'buoi_nghi': buoi_nghi,
+                            'approver': row['final_approver'],
+                            'created_time': row['created_time'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['created_time']) else 'N/A',
+                            'last_update': row['last_update'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['last_update']) else 'N/A',
+                            'paid': row['paid_timeoff'] if 'paid_timeoff' in row else False,
+                            'classification': reason_result['label'],
+                            'similarity_score': reason_result.get('similarity', 0),
+                            'day_info': day_label,
+                            'shift_info': shift_label
+                        },
+                        'display': 'block'
+                    })
+            elif time_info['is_all_day']:
+                # Nghỉ cả ngày - tạo 1 bản ghi all-day
+                title_with_day = f"{base_title}"
+                if day_label:
+                    title_with_day += f" - {day_label}"
+                    
+                processed_leaves.append({
+                    'title': title_with_day,
+                    'start': current_date.strftime('%Y-%m-%d'),
+                    'end': (current_date + timedelta(days=1)).strftime('%Y-%m-%d'),
+                    'color': reason_result['color'],
+                    'borderColor': reason_result['color'],
+                    'textColor': '#ffffff',
+                    'allDay': True,
+                    'extendedProps': {
+                        'id': row['id'],
+                        'employee': row['employee_name'],
+                        'state': row['state'],
+                        'metatype': row['metatype'],
+                        'days': row['total_leave_days'],
+                        'reason': row['ly_do'],
+                        'buoi_nghi': buoi_nghi,
+                        'approver': row['final_approver'],
+                        'created_time': row['created_time'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['created_time']) else 'N/A',
+                        'last_update': row['last_update'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['last_update']) else 'N/A',
+                        'paid': row['paid_timeoff'] if 'paid_timeoff' in row else False,
+                        'classification': reason_result['label'],
+                        'similarity_score': reason_result.get('similarity', 0),
+                        'day_info': day_label
+                    },
+                    'display': 'block'
+                })
+            else:
+                # Nghỉ một buổi cụ thể
+                title_with_day = f"{base_title}"
+                if day_label:
+                    title_with_day += f" - {day_label}"
+                    
+                processed_leaves.append({
+                    'title': title_with_day,
+                    'start': f"{current_date.strftime('%Y-%m-%d')}T{time_info['start_time']}",
+                    'end': f"{current_date.strftime('%Y-%m-%d')}T{time_info['end_time']}",
+                    'color': reason_result['color'],
+                    'borderColor': reason_result['color'],
+                    'textColor': '#ffffff',
+                    'allDay': False,
+                    'extendedProps': {
+                        'id': row['id'],
+                        'employee': row['employee_name'],
+                        'state': row['state'],
+                        'metatype': row['metatype'],
+                        'days': row['total_leave_days'],
+                        'reason': row['ly_do'],
+                        'buoi_nghi': buoi_nghi,
+                        'approver': row['final_approver'],
+                        'created_time': row['created_time'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['created_time']) else 'N/A',
+                        'last_update': row['last_update'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['last_update']) else 'N/A',
+                        'paid': row['paid_timeoff'] if 'paid_timeoff' in row else False,
+                        'classification': reason_result['label'],
+                        'similarity_score': reason_result.get('similarity', 0),
+                        'day_info': day_label
+                    },
+                    'display': 'block'
+                })
+
+        return processed_leaves
 
 # Cache dữ liệu để tránh gọi API liên tục
 @st.cache_data(ttl=300)  # Cache 5 phút
@@ -539,10 +704,10 @@ def load_timeoff_data():
     try:
         api_data = processor.get_base_timeoff_data()
         df = processor.extract_timeoff_to_dataframe(api_data)
-        return df
+        return df, processor
     except Exception as e:
         st.error(f"Lỗi khi tải dữ liệu: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(), None
 
 def get_state_info():
     """Trả về thông tin về các trạng thái và màu sắc"""
@@ -567,160 +732,52 @@ def get_metatype_info():
         'funeral': {'color': '#6c757d', 'icon': '🕊️', 'label': 'Nghỉ tang'}
     }
 
-def get_shift_time_range(buoi_nghi_list):
+def convert_df_to_calendar_events(df, processor, use_reason_classification=True):
     """
-    Phân tích buổi nghỉ và trả về thông tin thời gian cụ thể
-    
-    Args:
-        buoi_nghi_list: List các buổi nghỉ ['8:00-12:00', '13:00-17:30']
-    
-    Returns:
-        dict: {
-            'is_all_day': bool,
-            'start_time': str hoặc None,
-            'end_time': str hoặc None
-        }
+    UPGRADED VERSION: Chuyển DataFrame thành format events cho calendar 
+    với xử lý nghỉ nhiều ngày và tạo nhiều events cho mỗi buổi
     """
-    if not buoi_nghi_list or not isinstance(buoi_nghi_list, list):
-        return {'is_all_day': True, 'start_time': None, 'end_time': None}
-    
-    # Nếu có cả 2 buổi thì hiển thị all-day
-    if len(buoi_nghi_list) >= 2:
-        return {'is_all_day': True, 'start_time': None, 'end_time': None}
-    
-    # Nếu chỉ có 1 buổi, xác định thời gian cụ thể
-    if len(buoi_nghi_list) == 1:
-        shift = buoi_nghi_list[0]
-        
-        # Mapping các buổi nghỉ với thời gian cụ thể
-        shift_time_mapping = {
-            '8:00-12:00': {'start_time': '08:00:00', 'end_time': '12:00:00'},
-            '13:00-17:30': {'start_time': '13:00:00', 'end_time': '17:30:00'}
-        }
-        
-        if shift in shift_time_mapping:
-            time_info = shift_time_mapping[shift]
-            return {
-                'is_all_day': False, 
-                'start_time': time_info['start_time'], 
-                'end_time': time_info['end_time']
-            }
-    
-    # Default case - all day
-    return {'is_all_day': True, 'start_time': None, 'end_time': None}
-
-def convert_df_to_calendar_events(df, use_reason_classification=True):
-    """Chuyển DataFrame thành format events cho calendar với phân loại lý do bằng cosine similarity và hiển thị thời gian cụ thể"""
     events = []
     
-    if df.empty:
+    if df.empty or processor is None:
         return events
     
-    state_info = get_state_info()
-    metatype_info = get_metatype_info()
-    
     # Khởi tạo classifier
-    reason_classifier = ReasonClassifier() if use_reason_classification else None
+    classifier = ReasonClassifier() if use_reason_classification else None
     
-    for _, row in df.iterrows():
-        if pd.notna(row['start_date']) and pd.notna(row['end_date']):
-            # Determine color based on different criteria
-            if use_reason_classification:
-                # Khi sử dụng AI classification, luôn sử dụng colors từ ReasonClassifier
-                if row['ly_do'] and str(row['ly_do']).strip():
-                    # Có lý do - phân loại bằng AI
-                    reason_result = reason_classifier.classify_reason(str(row['ly_do']))
-                else:
-                    # Không có lý do - sử dụng default category từ ReasonClassifier
-                    reason_result = reason_classifier.get_default_category()
-                
-                color = reason_result['color']
-                icon = reason_result['icon']
-                classification_info = f" ({reason_result['label']})"
-                similarity_score = reason_result.get('similarity', 0)
-            else:
-                # Fallback về logic cũ khi không sử dụng AI classification
+    if not use_reason_classification:
+        # Fallback về logic cũ nếu không dùng AI
+        state_info = get_state_info()
+        metatype_info = get_metatype_info()
+        
+        for _, row in df.iterrows():
+            if pd.notna(row['start_date']) and pd.notna(row['end_date']):
+                # Logic cũ...
                 if row['state'] == 'approved':
                     color = metatype_info.get(row['metatype'], {}).get('color', '#28a745')
                     icon = metatype_info.get(row['metatype'], {}).get('icon', '📅')
                 else:
                     color = state_info.get(row['state'], {}).get('color', '#007bff')
                     icon = state_info.get(row['state'], {}).get('icon', '📅')
-                classification_info = ""
-                similarity_score = 0
-            
-            # Format title with icon
-            title = f"{icon} {row['employee_name']}"
-            
-            # Add reason if available
-            if row['ly_do'] and row['ly_do'] != '':
-                reason_short = row['ly_do'][:25] + "..." if len(row['ly_do']) > 25 else row['ly_do']
-                title += f" - {reason_short}"
-                if use_reason_classification:
-                    title += classification_info
-            else:
-                if not use_reason_classification:
-                    metatype_label = metatype_info.get(row['metatype'], {}).get('label', row['metatype'].title())
-                    title += f" - {metatype_label}"
-                else:
-                    title += classification_info
-            
-            # Add days info
-            if row['total_leave_days'] > 0:
-                title += f" ({row['total_leave_days']} ngày)"
-            
-            # Xử lý thời gian dựa vào buoi_nghi
-            buoi_nghi = row.get('buoi_nghi', [])
-            time_info = get_shift_time_range(buoi_nghi)
-            
-            # Create event với thời gian cụ thể hoặc all-day
-            event_base = {
-                "title": title,
-                "color": color,
-                "borderColor": color,
-                "textColor": "#ffffff",
-                "extendedProps": {
-                    "id": row['id'],
-                    "employee": row['employee_name'],
-                    "state": row['state'],
-                    "metatype": row['metatype'],
-                    "days": row['total_leave_days'],
-                    "reason": row['ly_do'],
-                    "buoi_nghi": buoi_nghi,
-                    "approver": row['final_approver'],
-                    "created_time": row['created_time'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['created_time']) else 'N/A',
-                    "last_update": row['last_update'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['last_update']) else 'N/A',
-                    "paid": row['paid_timeoff'] if 'paid_timeoff' in row else False,
-                    "classification": classification_info,
-                    "similarity_score": similarity_score
-                },
-                "display": "block"
-            }
-            
-            if time_info['is_all_day']:
-                # All-day event
-                event_base.update({
+                
+                title = f"{icon} {row['employee_name']}"
+                if row['ly_do'] and row['ly_do'] != '':
+                    reason_short = row['ly_do'][:25] + "..." if len(row['ly_do']) > 25 else row['ly_do']
+                    title += f" - {reason_short}"
+                
+                events.append({
+                    "title": title,
                     "start": row['start_date'].strftime('%Y-%m-%d'),
                     "end": (row['end_date'] + timedelta(days=1)).strftime('%Y-%m-%d'),
+                    "color": color,
                     "allDay": True
                 })
-            else:
-                # Timed event
-                start_datetime = f"{row['start_date'].strftime('%Y-%m-%d')}T{time_info['start_time']}"
-                end_datetime = f"{row['start_date'].strftime('%Y-%m-%d')}T{time_info['end_time']}"
-                
-                event_base.update({
-                    "start": start_datetime,
-                    "end": end_datetime,
-                    "allDay": False
-                })
-                
-                # Thêm thông tin thời gian vào title
-                shift_display = ', '.join(buoi_nghi) if buoi_nghi else ''
-                if shift_display:
-                    event_base["title"] += f" [{shift_display}]"
-            
-            events.append(event_base)
+    else:
+        # Sử dụng logic mới với AI classification
+        for _, row in df.iterrows():
+            processed_events = processor.process_and_structure_timeoff(row, classifier)
+            if processed_events:
+                events.extend(processed_events)
     
     return events
 
@@ -729,7 +786,6 @@ def display_calendar_legend(show_reason_classification=True):
     st.markdown("#### 📋 Chú thích")
     
     if show_reason_classification:
-        # Chỉ hiển thị legend cho reason classification
         st.markdown("**🎯 Phân loại theo lý do (AI Classification):**")
         
         reason_classifier = ReasonClassifier()
@@ -737,14 +793,13 @@ def display_calendar_legend(show_reason_classification=True):
         col1, col2 = st.columns(2)
         
         categories = list(reason_classifier.categories.items())
-        # Thêm category "Khác" vào cuối
         categories.append(('other', {
             'color': '#6c757d',
             'icon': '📝', 
             'label': 'Khác'
         }))
         
-        mid_point = len(categories) // 2 + 1  # Adjust for odd number of categories
+        mid_point = len(categories) // 2 + 1
         
         with col1:
             for category, info in categories[:mid_point]:
@@ -765,7 +820,7 @@ def display_calendar_legend(show_reason_classification=True):
         st.info("💡 Bật 'Sử dụng AI phân loại lý do' để xem chú thích màu sắc thông minh")
 
 def display_event_details(event_data):
-    """Hiển thị chi tiết event khi click"""
+    """Hiển thị chi tiết event khi click - UPGRADED với thông tin ngày và buổi"""
     if not event_data:
         return
     
@@ -773,7 +828,6 @@ def display_event_details(event_data):
     state_info = get_state_info()
     metatype_info = get_metatype_info()
     
-    # Get state and metatype info
     state = props.get('state', '')
     metatype = props.get('metatype', '')
     state_display = state_info.get(state, {})
@@ -781,7 +835,7 @@ def display_event_details(event_data):
     
     st.markdown("### 📋 Chi tiết yêu cầu nghỉ phép")
     
-    # Create a nice card layout
+    # Header card
     st.markdown(f"""
     <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
                 padding: 20px; border-radius: 10px; color: white; margin: 10px 0;">
@@ -794,10 +848,18 @@ def display_event_details(event_data):
     with col1:
         st.markdown("**📅 Thông tin thời gian:**")
         
-        # Hiển thị thông tin thời gian dựa vào allDay
         is_all_day = event_data.get('allDay', True)
         start_time = event_data.get('start', 'N/A')
         end_time = event_data.get('end', 'N/A')
+        
+        # Hiển thị thông tin ngày và buổi nếu có
+        day_info = props.get('day_info', '')
+        shift_info = props.get('shift_info', '')
+        
+        if day_info:
+            st.info(f"**📆 {day_info}**")
+        if shift_info:
+            st.success(f"**⏰ Buổi: {shift_info}**")
         
         if is_all_day:
             st.info(f"**Từ ngày:** {start_time}\n"
@@ -810,13 +872,10 @@ def display_event_details(event_data):
                     f"**Số ngày:** {props.get('days', 0)} ngày\n"
                     f"**Loại:** Theo giờ")
         
-        # Hiển thị buổi nghỉ
         buoi_nghi = props.get('buoi_nghi', [])
         if buoi_nghi and isinstance(buoi_nghi, list):
             buoi_nghi_str = ', '.join(buoi_nghi)
             st.success(f"**⏰ Buổi nghỉ:** {buoi_nghi_str}")
-        else:
-            st.info("**⏰ Buổi nghỉ:** Không có thông tin")
         
         st.markdown("**📊 Trạng thái & Loại:**")
         status_color = state_display.get('color', '#007bff')
@@ -843,7 +902,6 @@ def display_event_details(event_data):
         if reason and reason.strip():
             st.success(f"**Lý do:** {reason}")
             
-            # Hiển thị thông tin classification nếu có
             classification = props.get('classification', '')
             similarity_score = props.get('similarity_score', 0)
             if classification and similarity_score > 0:
@@ -856,11 +914,9 @@ def display_event_details(event_data):
         if approver and approver.strip():
             st.success(f"**Người duyệt:** {approver}")
         
-        # Additional info
         paid_status = "Có lương" if props.get('paid', False) else "Không lương"
         st.info(f"**Loại:** {paid_status}")
     
-    # Timeline info
     st.markdown("**⏰ Thời gian xử lý:**")
     col3, col4 = st.columns(2)
     with col3:
@@ -876,23 +932,19 @@ def display_reason_analysis(df):
         st.info("Không có dữ liệu lý do để phân tích")
         return
     
-    # Lọc ra những record có lý do
     df_with_reason = df[df['ly_do'].notna() & (df['ly_do'].astype(str).str.strip() != '')]
     
     if df_with_reason.empty:
         st.info("Không có lý do nghỉ phép trong dữ liệu")
         return
     
-    # Phân loại
     classifier = ReasonClassifier()
     reasons_list = df_with_reason['ly_do'].astype(str).tolist()
     distribution = classifier.get_category_distribution(reasons_list)
     
-    # Hiển thị kết quả
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        # Biểu đồ phân bố
         if distribution:
             categories = []
             counts = []
@@ -914,7 +966,6 @@ def display_reason_analysis(df):
             st.plotly_chart(fig, use_container_width=True)
     
     with col2:
-        # Thống kê chi tiết
         st.markdown("**📊 Thống kê chi tiết:**")
         
         total_with_reason = len(df_with_reason)
@@ -924,7 +975,6 @@ def display_reason_analysis(df):
         st.metric("Đã phân loại", total_classified)
         st.metric("Tỷ lệ phân loại", f"{total_classified/total_with_reason*100:.1f}%")
         
-        # Top categories
         sorted_categories = sorted(distribution.items(), key=lambda x: x[1]['count'], reverse=True)
         
         st.markdown("**🏆 Top categories:**")
@@ -940,30 +990,23 @@ def display_buoi_nghi_analysis(df):
         st.info("Không có dữ liệu buổi nghỉ để phân tích")
         return
     
-    # Lọc ra những record có buoi_nghi
-    if 'buoi_nghi' in df.columns:
-        df_with_buoi = df[df['buoi_nghi'].notna() & (df['buoi_nghi'].astype(str) != '[]')]
-    else:
-        df_with_buoi = pd.DataFrame()  # Empty DataFrame if column doesn't exist
+    df_with_buoi = df[df['buoi_nghi'].notna() & (df['buoi_nghi'].astype(str) != '[]')]
     
     if df_with_buoi.empty:
         st.info("Không có dữ liệu buổi nghỉ")
         return
     
-    # Phân tích buổi nghỉ
     shift_counts = {}
     shift_combinations = {}
     
     for idx, row in df_with_buoi.iterrows():
         buoi_nghi = row['buoi_nghi']
         if isinstance(buoi_nghi, list) and buoi_nghi:
-            # Đếm từng buổi
             for shift in buoi_nghi:
                 if shift not in shift_counts:
                     shift_counts[shift] = 0
                 shift_counts[shift] += 1
             
-            # Đếm combination
             combination_key = ' + '.join(sorted(buoi_nghi))
             if combination_key not in shift_combinations:
                 shift_combinations[combination_key] = 0
@@ -972,7 +1015,6 @@ def display_buoi_nghi_analysis(df):
     col1, col2 = st.columns(2)
     
     with col1:
-        # Biểu đồ buổi nghỉ đơn lẻ
         if shift_counts:
             shifts = list(shift_counts.keys())
             counts = list(shift_counts.values())
@@ -989,9 +1031,8 @@ def display_buoi_nghi_analysis(df):
             st.plotly_chart(fig1, use_container_width=True)
     
     with col2:
-        # Biểu đồ combination
         if shift_combinations:
-            combinations = list(shift_combinations.keys())[:10]  # Top 10
+            combinations = list(shift_combinations.keys())[:10]
             combo_counts = [shift_combinations[combo] for combo in combinations]
             
             fig2 = px.bar(
@@ -1006,7 +1047,6 @@ def display_buoi_nghi_analysis(df):
             fig2.update_layout(height=400, showlegend=False)
             st.plotly_chart(fig2, use_container_width=True)
     
-    # Thống kê chi tiết
     st.markdown("### 📈 Thống kê buổi nghỉ:")
     
     col3, col4, col5 = st.columns(3)
@@ -1022,20 +1062,11 @@ def display_buoi_nghi_analysis(df):
     with col5:
         avg_shifts_per_request = total_shifts / len(df_with_buoi)
         st.metric("Trung bình buổi/yêu cầu", f"{avg_shifts_per_request:.1f}")
-    
-    # Top shifts
-    if shift_counts:
-        st.markdown("**🏆 Top buổi nghỉ phổ biến:**")
-        sorted_shifts = sorted(shift_counts.items(), key=lambda x: x[1], reverse=True)
-        
-        for i, (shift, count) in enumerate(sorted_shifts[:5]):
-            percentage = (count / total_shifts * 100) if total_shifts > 0 else 0
-            st.markdown(f"**{i+1}.** {shift}: {count} lần ({percentage:.1f}%)")
 
 def main():
-    """Main dashboard"""
+    """Main dashboard - UPGRADED VERSION"""
     
-    # Custom CSS for better UI
+    # Custom CSS
     st.markdown("""
     <style>
     .main-header {
@@ -1062,37 +1093,38 @@ def main():
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     }
     
-    .legend-item {
-        display: flex;
-        align-items: center;
-        margin: 5px 0;
-        padding: 5px;
-        background: #f8f9fa;
-        border-radius: 5px;
+    .upgrade-badge {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        color: white;
+        padding: 5px 15px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: bold;
+        display: inline-block;
+        margin-left: 10px;
     }
     </style>
     """, unsafe_allow_html=True)
     
-    # Header with gradient
+    # Header
     st.markdown("""
     <div class="main-header">
-        <h1>🏖️ Time Off Management Dashboard</h1>
-        <p>Quản lý và theo dõi yêu cầu nghỉ phép một cách hiệu quả với AI Classification</p>
+        <h1>🏖️ Time Off Management Dashboard <span class="upgrade-badge">✨ UPGRADED</span></h1>
+        <p>Quản lý và theo dõi yêu cầu nghỉ phép với AI Classification & Multi-day Support</p>
     </div>
     """, unsafe_allow_html=True)
     
     # Load data
     with st.spinner("🔄 Đang tải dữ liệu..."):
-        df = load_timeoff_data()
+        df, processor = load_timeoff_data()
     
     if df.empty:
         st.error("❌ Không thể tải dữ liệu timeoff")
         return
     
-    # Sidebar filters with better styling
+    # Sidebar filters
     st.sidebar.markdown("## 🔍 Bộ lọc dữ liệu")
     
-    # AI Classification option
     use_ai_classification = st.sidebar.checkbox("🤖 Sử dụng AI phân loại lý do", value=True)
     
     # Date range filter
@@ -1115,7 +1147,7 @@ def main():
         default=['Tất cả']
     )
     
-    # State filter with icons
+    # State filter
     state_info = get_state_info()
     state_options = ['Tất cả'] + [f"{info['icon']} {info['label']}" for state, info in state_info.items()]
     selected_states_display = st.sidebar.multiselect(
@@ -1124,7 +1156,6 @@ def main():
         default=['Tất cả']
     )
     
-    # Convert back to original state values
     selected_states = []
     if 'Tất cả' not in selected_states_display:
         for display in selected_states_display:
@@ -1134,7 +1165,7 @@ def main():
     else:
         selected_states = ['Tất cả']
     
-    # Metatype filter with icons
+    # Metatype filter
     metatype_info = get_metatype_info()
     metatype_options = ['Tất cả'] + [f"{info['icon']} {info['label']}" for meta, info in metatype_info.items()]
     selected_metatypes_display = st.sidebar.multiselect(
@@ -1143,7 +1174,6 @@ def main():
         default=['Tất cả']
     )
     
-    # Convert back to original metatype values
     selected_metatypes = []
     if 'Tất cả' not in selected_metatypes_display:
         for display in selected_metatypes_display:
@@ -1156,26 +1186,22 @@ def main():
     # Apply filters
     filtered_df = df.copy()
     
-    # Date filter
     if len(date_range) == 2:
         filtered_df = filtered_df[
             (filtered_df['start_date'].dt.date >= date_range[0]) & 
             (filtered_df['start_date'].dt.date <= date_range[1])
         ]
     
-    # Employee filter
     if 'Tất cả' not in selected_employees:
         filtered_df = filtered_df[filtered_df['employee_name'].isin(selected_employees)]
     
-    # State filter
     if 'Tất cả' not in selected_states:
         filtered_df = filtered_df[filtered_df['state'].isin(selected_states)]
     
-    # Metatype filter
     if 'Tất cả' not in selected_metatypes:
         filtered_df = filtered_df[filtered_df['metatype'].isin(selected_metatypes)]
     
-    # Summary metrics with better styling
+    # Summary metrics
     st.markdown("### 📊 Tổng quan")
     col1, col2, col3, col4 = st.columns(4)
     
@@ -1212,7 +1238,7 @@ def main():
             delta=f"{avg_days:.1f} ngày/yêu cầu"
         )
     
-    # Tabs with improved styling
+    # Tabs
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📅 Calendar View", 
         "📊 Analytics", 
@@ -1224,12 +1250,11 @@ def main():
     
     with tab1:
         st.markdown("### 📅 Lịch Time Off")
+        st.info("✨ UPGRADED: Hỗ trợ hiển thị nghỉ nhiều ngày, tạo nhiều events cho mỗi buổi nghỉ")
         
-        # Calendar controls
         col1, col2 = st.columns([3, 1])
         
         with col1:
-            # Calendar mode selection with better options
             mode_options = {
                 "dayGridMonth": "📅 Tháng",
                 "dayGridWeek": "📅 Tuần", 
@@ -1240,10 +1265,9 @@ def main():
             selected_mode_display = st.selectbox(
                 "Chế độ xem:",
                 list(mode_options.values()),
-                index=0
+                index=2  # Default to timeGridWeek để thấy rõ events theo giờ
             )
             
-            # Get actual mode value
             mode = [k for k, v in mode_options.items() if v == selected_mode_display][0]
         
         with col2:
@@ -1251,106 +1275,44 @@ def main():
             show_legend = st.checkbox("Hiển thị chú thích", value=True)
             show_weekend = st.checkbox("Hiển thị cuối tuần", value=True)
         
-        # Convert data to events with AI classification
-        events = convert_df_to_calendar_events(filtered_df, use_reason_classification=use_ai_classification)
+        # Convert data to events
+        events = convert_df_to_calendar_events(filtered_df, processor, use_reason_classification=use_ai_classification)
         
-        # Enhanced calendar options
+        # Calendar options
         calendar_options = {
             "editable": False,
             "navLinks": True,
             "selectable": False,
-            "dayMaxEvents": 3,
+            "dayMaxEvents": 5,
             "moreLinkClick": "popover",
             "eventDisplay": "block",
-            "displayEventTime": mode == "timeGridWeek",  # Chỉ hiển thị thời gian ở chế độ tuần theo giờ
+            "displayEventTime": True,
             "weekends": show_weekend,
             "headerToolbar": {
                 "left": "today prev,next",
                 "center": "title", 
                 "right": "dayGridMonth,dayGridWeek,timeGridWeek,listMonth"
             },
-            "footerToolbar": {
-                "left": "",
-                "center": "",
-                "right": ""
-            },
             "initialView": mode,
             "height": 700,
-            "eventMouseEnter": True,
-            "eventMouseLeave": True,
             "locale": "vi",
-            "buttonText": {
-                "today": "Hôm nay",
-                "month": "Tháng",
-                "week": "Tuần", 
-                "day": "Ngày",
-                "list": "Danh sách"
-            },
-            "slotMinTime": "06:00:00",  # Hiển thị từ 6h sáng
-            "slotMaxTime": "20:00:00"   # Hiển thị đến 8h tối
+            "slotMinTime": "06:00:00",
+            "slotMaxTime": "20:00:00",
+            "slotDuration": "00:30:00",
+            "expandRows": True
         }
         
-        # Custom CSS for calendar
+        # Custom CSS
         custom_css = """
         <style>
-        .fc {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
         .fc-event {
-            font-size: 13px;
-            border-radius: 6px;
-            border: none;
+            font-size: 12px;
+            border-radius: 4px;
             padding: 2px 4px;
-            font-weight: 500;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-            transition: all 0.2s ease;
-        }
-        .fc-event:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-        }
-        .fc-event-title {
-            font-weight: 600;
-            text-overflow: ellipsis;
-            overflow: hidden;
-        }
-        .fc-event-time {
-            font-weight: 700;
-            color: rgba(255, 255, 255, 0.9);
-        }
-        .fc-daygrid-event {
-            margin: 1px 2px;
+            margin: 1px 0;
         }
         .fc-timegrid-event {
-            margin: 1px;
-        }
-        .fc-button-primary {
-            background-color: #667eea;
-            border-color: #667eea;
-        }
-        .fc-button-primary:hover {
-            background-color: #764ba2;
-            border-color: #764ba2;
-        }
-        .fc-today-button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }
-        .fc-header-toolbar {
-            margin-bottom: 1em;
-            padding: 10px;
-            background: #f8f9fa;
-            border-radius: 8px;
-        }
-        .fc-col-header-cell {
-            background: #f8f9fa;
-            font-weight: 600;
-        }
-        .fc-day-today {
-            background-color: rgba(102, 126, 234, 0.1) !important;
-        }
-        .fc-timegrid-slot-label {
-            font-size: 12px;
-            font-weight: 500;
+            border-left-width: 3px !important;
         }
         </style>
         """
@@ -1359,27 +1321,25 @@ def main():
         
         # Display calendar
         if events:
+            st.markdown(f"**📊 Tổng số events hiển thị: {len(events)}**")
             st.markdown('<div class="calendar-container">', unsafe_allow_html=True)
             
             calendar_state = calendar(
                 events=events,
                 options=calendar_options,
                 custom_css=custom_css,
-                key="timeoff_calendar"
+                key="timeoff_calendar_upgraded"
             )
             
             st.markdown('</div>', unsafe_allow_html=True)
             
-            # Show selected event details in a nice format
             if calendar_state.get("eventClick"):
                 event_data = calendar_state["eventClick"]["event"]
                 display_event_details(event_data)
                 
         else:
             st.info("📅 Không có dữ liệu time off trong khoảng thời gian được chọn")
-            st.markdown("**Gợi ý:** Thử điều chỉnh bộ lọc để xem thêm dữ liệu")
         
-        # Show legend
         if show_legend:
             display_calendar_legend(show_reason_classification=use_ai_classification)
     
@@ -1390,7 +1350,6 @@ def main():
             col1, col2 = st.columns(2)
             
             with col1:
-                # Chart by state với màu sắc tùy chỉnh
                 state_counts = filtered_df['state'].value_counts()
                 colors = [get_state_info().get(state, {}).get('color', '#007bff') for state in state_counts.index]
                 
@@ -1401,40 +1360,32 @@ def main():
                     color_discrete_sequence=colors
                 )
                 fig1.update_traces(textposition='inside', textinfo='percent+label')
-                fig1.update_layout(showlegend=True, height=400)
                 st.plotly_chart(fig1, use_container_width=True)
                 
-                # Top employees
                 top_employees = filtered_df['employee_name'].value_counts().head(10)
                 fig3 = px.bar(
                     x=top_employees.values,
                     y=top_employees.index,
                     orientation='h',
-                    title="👥 Top 10 nhân viên có nhiều yêu cầu nhất",
-                    labels={'x': 'Số yêu cầu', 'y': 'Nhân viên'},
+                    title="👥 Top 10 nhân viên",
                     color=top_employees.values,
                     color_continuous_scale="viridis"
                 )
-                fig3.update_layout(height=400, showlegend=False)
                 st.plotly_chart(fig3, use_container_width=True)
             
             with col2:
-                # Chart by metatype với màu sắc tùy chỉnh
                 metatype_counts = filtered_df['metatype'].value_counts()
                 colors = [get_metatype_info().get(meta, {}).get('color', '#007bff') for meta in metatype_counts.index]
                 
                 fig2 = px.bar(
                     x=[get_metatype_info().get(meta, {}).get('label', meta) for meta in metatype_counts.index],
                     y=metatype_counts.values,
-                    title="📋 Phân bố theo loại nghỉ phép",
-                    labels={'x': 'Loại', 'y': 'Số lượng'},
+                    title="📋 Phân bố theo loại",
                     color=metatype_counts.values,
                     color_discrete_sequence=colors
                 )
-                fig2.update_layout(height=400, showlegend=False)
                 st.plotly_chart(fig2, use_container_width=True)
                 
-                # Timeline
                 if 'start_date' in filtered_df.columns:
                     monthly_data = filtered_df.groupby(
                         filtered_df['start_date'].dt.to_period('M')
@@ -1449,8 +1400,6 @@ def main():
                         title="📈 Xu hướng theo thời gian",
                         markers=True
                     )
-                    fig4.update_traces(line=dict(width=3), marker=dict(size=8))
-                    fig4.update_layout(height=400)
                     st.plotly_chart(fig4, use_container_width=True)
     
     with tab3:
@@ -1462,7 +1411,6 @@ def main():
     with tab5:
         st.subheader("📋 Bảng dữ liệu")
         
-        # Display options
         col1, col2, col3 = st.columns([2, 1, 1])
         with col2:
             show_all_columns = st.checkbox("Hiển thị tất cả cột", False)
@@ -1473,7 +1421,6 @@ def main():
             if show_all_columns:
                 display_df = filtered_df
             else:
-                # Select important columns including buoi_nghi
                 important_cols = [
                     'employee_name', 'state', 'metatype', 'start_date', 'end_date', 
                     'total_leave_days', 'buoi_nghi', 'ly_do', 'final_approver'
@@ -1481,13 +1428,11 @@ def main():
                 available_cols = [col for col in important_cols if col in filtered_df.columns]
                 display_df = filtered_df[available_cols]
             
-            # Format dates
             if 'start_date' in display_df.columns:
                 display_df['start_date'] = pd.to_datetime(display_df['start_date']).dt.strftime('%Y-%m-%d')
             if 'end_date' in display_df.columns:
                 display_df['end_date'] = pd.to_datetime(display_df['end_date']).dt.strftime('%Y-%m-%d')
             
-            # Format buoi_nghi for display
             if 'buoi_nghi' in display_df.columns:
                 display_df_copy = display_df.copy()
                 display_df_copy['buoi_nghi'] = display_df_copy['buoi_nghi'].apply(
@@ -1495,49 +1440,29 @@ def main():
                 )
                 display_df = display_df_copy
             
-            # Pagination
-            total_rows = len(display_df)
-            total_pages = (total_rows + items_per_page - 1) // items_per_page
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
             
-            if total_pages > 1:
-                page = st.selectbox(f"Trang (1-{total_pages})", range(1, total_pages + 1))
-                start_idx = (page - 1) * items_per_page
-                end_idx = start_idx + items_per_page
-                display_df_page = display_df.iloc[start_idx:end_idx]
-            else:
-                display_df_page = display_df
-            
-            st.dataframe(
-                display_df_page,
-                use_container_width=True,
-                hide_index=True
-            )
-            
-            # Download section
             st.markdown("### 📥 Tải xuống dữ liệu")
             col1, col2 = st.columns(2)
             
             with col1:
                 csv = filtered_df.to_csv(index=False, encoding='utf-8-sig')
                 st.download_button(
-                    label="📥 Tải xuống dữ liệu đã lọc (CSV)",
+                    label="📥 Tải xuống CSV",
                     data=csv,
-                    file_name=f"filtered_timeoff_data_{datetime.now().strftime('%Y%m%d')}.csv",
+                    file_name=f"timeoff_data_{datetime.now().strftime('%Y%m%d')}.csv",
                     mime="text/csv",
                     type="primary"
                 )
             
             with col2:
-                # JSON download
                 json_data = filtered_df.to_json(orient='records', date_format='iso', force_ascii=False)
                 st.download_button(
-                    label="📥 Tải xuống dữ liệu đã lọc (JSON)",
+                    label="📥 Tải xuống JSON",
                     data=json_data,
-                    file_name=f"filtered_timeoff_data_{datetime.now().strftime('%Y%m%d')}.json",
+                    file_name=f"timeoff_data_{datetime.now().strftime('%Y%m%d')}.json",
                     mime="application/json"
                 )
-        else:
-            st.info("📭 Không có dữ liệu phù hợp với bộ lọc")
     
     with tab6:
         st.subheader("⚙️ Cài đặt hệ thống")
@@ -1546,46 +1471,41 @@ def main():
         
         with col1:
             st.markdown("#### 📈 Thông tin hệ thống")
-            info_data = {
-                "Tổng số records": len(df),
-                "Số nhân viên": df['employee_name'].nunique(),
-                "Records sau lọc": len(filtered_df),
-                "Khoảng thời gian": f"{df['start_date'].min().strftime('%Y-%m-%d') if pd.notna(df['start_date'].min()) else 'N/A'} → {df['start_date'].max().strftime('%Y-%m-%d') if pd.notna(df['start_date'].max()) else 'N/A'}"
-            }
+            st.metric("Tổng số records", len(df))
+            st.metric("Số nhân viên", df['employee_name'].nunique())
+            st.metric("Records sau lọc", len(filtered_df))
             
-            for label, value in info_data.items():
-                st.metric(label, value)
+            # Upgrade features
+            st.markdown("#### ✨ Tính năng mới")
+            st.success("✅ Xử lý timezone chính xác (pytz)")
+            st.success("✅ Hỗ trợ nghỉ nhiều ngày")
+            st.success("✅ Tạo nhiều events cho mỗi buổi")
+            st.success("✅ Hiển thị chi tiết ngày và buổi")
         
         with col2:
             st.markdown("#### 🔧 Công cụ quản lý")
             
-            # Refresh button
             if st.button("🔄 Làm mới dữ liệu", type="primary", use_container_width=True):
                 st.cache_data.clear()
                 st.rerun()
             
             st.markdown("---")
             
-            # Export full data
-            st.markdown("**📤 Xuất toàn bộ dữ liệu:**")
             full_csv = df.to_csv(index=False, encoding='utf-8-sig')
             st.download_button(
-                label="📥 Tải xuống toàn bộ dữ liệu (CSV)",
+                label="📥 Tải xuống toàn bộ dữ liệu",
                 data=full_csv,
                 file_name=f"full_timeoff_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
                 use_container_width=True
             )
             
-            # System stats
             st.markdown("---")
-            st.markdown("**⚡ Trạng thái hệ thống:**")
+            st.markdown("**⚡ Trạng thái:**")
             st.success("✅ API Connection: Active")
             st.success("✅ Data Cache: Active")
-            st.success("✅ Environment Variables: Loaded")
-            st.success("✅ AI Classification: Enabled")
-            st.success("✅ Shift Analysis: Enabled")
-            st.success("✅ Time-based Display: Enabled")
+            st.success("✅ Timezone: Asia/Ho_Chi_Minh")
+            st.success("✅ Multi-day Support: Enabled")
             st.info(f"🕒 Last Update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 if __name__ == "__main__":
